@@ -21,6 +21,7 @@ from modules.qcnet_agent_encoder import QCNetAgentEncoder
 from modules.qcnet_map_encoder import QCNetMapEncoder
 
 
+
 class QCNetEncoder(nn.Module):
 
     def __init__(self,
@@ -28,12 +29,12 @@ class QCNetEncoder(nn.Module):
                  input_dim: int,
                  hidden_dim: int,
                  num_historical_steps: int,
-                 pl2pl_radius: float,
+                 pl2pl_radius: float,       # 地图多边形之间的交互半径
                  time_span: Optional[int],
                  pl2a_radius: float,
                  a2a_radius: float,
                  num_freq_bands: int,
-                 num_map_layers: int,
+                 num_map_layers: int,        # 地图编码器中的层数
                  num_agent_layers: int,
                  num_heads: int,
                  head_dim: int,
@@ -66,7 +67,7 @@ class QCNetEncoder(nn.Module):
             dropout=dropout,
         )
 
-    def forward(self, data: HeteroData) -> Dict[str, torch.Tensor]:
-        map_enc = self.map_encoder(data)
-        agent_enc = self.agent_encoder(data, map_enc)
-        return {**map_enc, **agent_enc}
+    def forward(self, data: HeteroData) -> Dict[str, torch.Tensor]:        # 异构数据
+        map_enc = self.map_encoder(data) # 调用地图编码器：调用map_encoder来处理输入数据中的地图相关信息
+        agent_enc = self.agent_encoder(data, map_enc) # 调用智能体编码器：调用agent_encoder来处理输入数据中的智能体相关信息
+        return {**map_enc, **agent_enc}  # 返回一个字典，其中包含了地图编码和智能体编码的结果

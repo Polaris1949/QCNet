@@ -20,6 +20,7 @@ from metrics.utils import topk
 from metrics.utils import valid_filter
 
 
+# 处理不完整数据或异常值
 class MR(Metric):
 
     def __init__(self,
@@ -36,17 +37,17 @@ class MR(Metric):
                prob: Optional[torch.Tensor] = None,
                valid_mask: Optional[torch.Tensor] = None,
                keep_invalid_final_step: bool = True,
-               miss_criterion: str = 'FDE',
-               miss_threshold: float = 2.0) -> None:
+               miss_criterion: str = 'FDE',                 #  缺失标准，用于确定预测是否被认为是缺失的
+               miss_threshold: float = 2.0) -> None:        #  缺失阈值，用于确定预测是否被认为是缺失的阈值
         pred, target, prob, valid_mask, _ = valid_filter(pred, target, prob, valid_mask, None, keep_invalid_final_step)
         pred_topk, _ = topk(self.max_guesses, pred, prob)
-        if miss_criterion == 'FDE':
+        if miss_criterion == 'FDE':          # 计算每个样本的第一个预测误差超过阈值的情况
             inds_last = (valid_mask * torch.arange(1, valid_mask.size(-1) + 1, device=self.device)).argmax(dim=-1)
-            self.sum += (torch.norm(pred_topk[torch.arange(pred.size(0)), :, inds_last] -
+            self.sum += (torch.norm(pred_topk[torch.arange(pred.size(0)), :, inds_last] -     # 通过比较每个样本的最小误差是否大于miss_threshold来确定累加缺失
                                     target[torch.arange(pred.size(0)), inds_last].unsqueeze(-2),
                                     p=2, dim=-1).min(dim=-1)[0] > miss_threshold).sum()
-        elif miss_criterion == 'MAXDE':
-            self.sum += (((torch.norm(pred_topk - target.unsqueeze(1),
+        elif miss_criterion == 'MAXDE':      # 计算每个样本的最大预测误差超过阈值的情况
+            self.sum += (((torch.norm(pred_topk - target.unsqueeze(1),          # ：通过比较每个样本的最大误差是否大于miss_threshold来确定累加缺失
                                       p=2, dim=-1) * valid_mask.unsqueeze(1)).max(dim=-1)[0]).min(dim=-1)[0] >
                          miss_threshold).sum()
         else:

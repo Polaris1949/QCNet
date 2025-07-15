@@ -39,19 +39,19 @@ class minADE(Metric):
                min_criterion: str = 'FDE') -> None:
         pred, target, prob, valid_mask, _ = valid_filter(pred, target, prob, valid_mask, None, keep_invalid_final_step)
         pred_topk, _ = topk(self.max_guesses, pred, prob)
-        if min_criterion == 'FDE':
-            inds_last = (valid_mask * torch.arange(1, valid_mask.size(-1) + 1, device=self.device)).argmax(dim=-1)
-            inds_best = torch.norm(
+        if min_criterion == 'FDE':              # 计算第一个检测到的错误，即第一个预测与目标之间的最小欧几里得距离
+            inds_last = (valid_mask * torch.arange(1, valid_mask.size(-1) + 1, device=self.device)).argmax(dim=-1)   # 计算最后一个有效预测的索引
+            inds_best = torch.norm(                                                                              #  计算每个预测与目标之间的欧几里得距离
                 pred_topk[torch.arange(pred.size(0)), :, inds_last] -
-                target[torch.arange(pred.size(0)), inds_last].unsqueeze(-2), p=2, dim=-1).argmin(dim=-1)
+                target[torch.arange(pred.size(0)), inds_last].unsqueeze(-2), p=2, dim=-1).argmin(dim=-1)         # .argmin(dim=-1) 找到距离最小的预测的索引
             self.sum += ((torch.norm(pred_topk[torch.arange(pred.size(0)), inds_best] - target, p=2, dim=-1) *
-                          valid_mask).sum(dim=-1) / valid_mask.sum(dim=-1)).sum()
-        elif min_criterion == 'ADE':
-            self.sum += ((torch.norm(pred_topk - target.unsqueeze(1), p=2, dim=-1) *
+                          valid_mask).sum(dim=-1) / valid_mask.sum(dim=-1)).sum()                                # 将所有样本的有效预测距离之和除以有效预测数量
+        elif min_criterion == 'ADE':                                                  # 计算所有预测与目标之间的平均欧几里得距离的最小值
+            self.sum += ((torch.norm(pred_topk - target.unsqueeze(1), p=2, dim=-1) *                # 计算平均最小距离并更新内部状态
                           valid_mask.unsqueeze(1)).sum(dim=-1).min(dim=-1)[0] / valid_mask.sum(dim=-1)).sum()
         else:
             raise ValueError('{} is not a valid criterion'.format(min_criterion))
-        self.count += pred.size(0)
+        self.count += pred.size(0)         # 增加 count 状态的计数
 
     def compute(self) -> torch.Tensor:
         return self.sum / self.count

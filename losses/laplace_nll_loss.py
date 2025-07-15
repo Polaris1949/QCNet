@@ -29,14 +29,14 @@ class LaplaceNLLLoss(nn.Module):
                 target: torch.Tensor) -> torch.Tensor:
         loc, scale = pred.chunk(2, dim=-1)
         scale = scale.clone()
-        with torch.no_grad():
-            scale.clamp_(min=self.eps)
+        with torch.no_grad():              # 暂时禁用梯度计算
+            scale.clamp_(min=self.eps)     #  将 scale 的值限制在一个最小值 eps 以上，以避免数值不稳定
         nll = torch.log(2 * scale) + torch.abs(target - loc) / scale
-        if self.reduction == 'mean':
+        if self.reduction == 'mean':         # 检查 reduction 参数是否为 'mean'，如果是，则计算损失的平均值。
             return nll.mean()
-        elif self.reduction == 'sum':
+        elif self.reduction == 'sum':       # 检查 reduction 参数是否为 'sum'，如果是，则计算损失的总和。
             return nll.sum()
-        elif self.reduction == 'none':
+        elif self.reduction == 'none':       # 检查 reduction 参数是否为 'none'，如果是，则返回每个样本的损失。
             return nll
         else:
             raise ValueError('{} is not a valid value for reduction'.format(self.reduction))

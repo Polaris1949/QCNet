@@ -15,16 +15,17 @@ import torch
 from torchmetrics import Metric
 
 
+
 class AverageMeter(Metric):
 
     def __init__(self, **kwargs) -> None:
         super(AverageMeter, self).__init__(**kwargs)
-        self.add_state('sum', default=torch.tensor(0.0), dist_reduce_fx='sum')
-        self.add_state('count', default=torch.tensor(0), dist_reduce_fx='sum')
+        self.add_state('sum', default=torch.tensor(0.0), dist_reduce_fx='sum')  # 'sum' 用于累积所有传入值的总和
+        self.add_state('count', default=torch.tensor(0), dist_reduce_fx='sum')  # 'count' 用于累积传入值的数量
 
     def update(self, val: torch.Tensor) -> None:
-        self.sum += val.sum()
-        self.count += val.numel()
+        self.sum += val.sum()           # 将传入的张量 val 的元素求和，并累加到 'sum' 状态
+        self.count += val.numel()       # 将传入的张量 val 的元素数量求和，累加到 'count' 状态
 
     def compute(self) -> torch.Tensor:
-        return self.sum / self.count
+        return self.sum / self.count          # 计算所有传入值的平均值

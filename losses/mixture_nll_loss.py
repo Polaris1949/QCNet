@@ -23,6 +23,7 @@ from losses.laplace_nll_loss import LaplaceNLLLoss
 from losses.von_mises_nll_loss import VonMisesNLLLoss
 
 
+# 处理混合分布的负对数似然损失
 class MixtureNLLLoss(nn.Module):
 
     def __init__(self,
@@ -43,13 +44,14 @@ class MixtureNLLLoss(nn.Module):
             self.nll_loss = nn.ModuleList([loss_dict[dist](eps=eps, reduction='none')
                                            for dist in component_distribution])
 
+# 根据 component_distribution 的值来决定如何组合各个分布的损失
     def forward(self,
                 pred: torch.Tensor,
                 target: torch.Tensor,
-                prob: torch.Tensor,
-                mask: torch.Tensor,
-                ptr: Optional[torch.Tensor] = None,
-                joint: bool = False) -> torch.Tensor:
+                prob: torch.Tensor,   # 混合分布中每个组成部分的概率
+                mask: torch.Tensor,   # 掩码张量，用于选择性地计算损失
+                ptr: Optional[torch.Tensor] = None,    # 可选的指针张量，用于分段计算损失，通常用于处理稀疏数据
+                joint: bool = False) -> torch.Tensor:  # 布尔值，指示是否在计算损失时考虑联合分布
         if isinstance(self.nll_loss, nn.ModuleList):
             nll = torch.cat(
                 [self.nll_loss[i](pred=pred[..., [i, target.size(-1) + i]],
@@ -66,8 +68,8 @@ class MixtureNLLLoss(nn.Module):
                 nll = segment_csr(src=nll, indptr=ptr, reduce='sum')
         else:
             pass
-        log_pi = F.log_softmax(prob, dim=-1)
-        loss = -torch.logsumexp(log_pi - nll, dim=-1)
+        log_pi = F.log_softmax(prob, dim=-1)         # 计算混合分布概率的对数
+        loss = -torch.logsumexp(log_pi - nll, dim=-1)   # 计算最终的损失值
         if self.reduction == 'mean':
             return loss.mean()
         elif self.reduction == 'sum':

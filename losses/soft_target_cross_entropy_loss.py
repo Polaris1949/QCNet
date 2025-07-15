@@ -15,7 +15,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 class SoftTargetCrossEntropyLoss(nn.Module):
 
     def __init__(self, reduction: str = 'mean') -> None:
@@ -25,7 +24,7 @@ class SoftTargetCrossEntropyLoss(nn.Module):
     def forward(self,
                 pred: torch.Tensor,
                 target: torch.Tensor) -> torch.Tensor:
-        cross_entropy = torch.sum(-target * F.log_softmax(pred, dim=-1), dim=-1)
+        cross_entropy = torch.sum(-target * F.log_softmax(pred, dim=-1), dim=-1)        # 计算交叉熵损失。这里的 target 应该是一个概率分布，而不是硬标签。
         if self.reduction == 'mean':
             return cross_entropy.mean()
         elif self.reduction == 'sum':

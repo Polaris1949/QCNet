@@ -17,6 +17,7 @@ import torch.nn as nn
 from utils import weight_init
 
 
+# 定义了一个包含两个全连接层和层归一化及 ReLU 激活函数的多层感知机
 class MLPLayer(nn.Module):
 
     def __init__(self,
@@ -27,7 +28,7 @@ class MLPLayer(nn.Module):
         self.mlp = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
-            nn.ReLU(inplace=True),
+            nn.ReLU(inplace=True),     # 引入非线性. inplace=True 表示在原地进行计算，可以减少内存使用
             nn.Linear(hidden_dim, output_dim),
         )
         self.apply(weight_init)

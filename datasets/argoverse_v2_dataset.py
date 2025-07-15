@@ -31,12 +31,13 @@ from tqdm import tqdm
 from utils import safe_list_index
 from utils import side_to_directed_lineseg
 
-try:
+
+try:                    # 尝试导入模块和函数
     from av2.geometry.interpolate import compute_midpoint_line
     from av2.map.map_api import ArgoverseStaticMap
     from av2.map.map_primitives import Polyline
     from av2.utils.io import read_json_file
-except ImportError:
+except ImportError:          #  错误捕捉
     compute_midpoint_line = object
     ArgoverseStaticMap = object
     Polyline = object
@@ -76,19 +77,19 @@ class ArgoverseV2Dataset(Dataset):
                  raw_dir: Optional[str] = None,
                  processed_dir: Optional[str] = None,
                  transform: Optional[Callable] = None,
-                 dim: int = 3,
+                 dim: int = 3,           # 数据维度
                  num_historical_steps: int = 50,
                  num_future_steps: int = 60,
-                 predict_unseen_agents: bool = False,
-                 vector_repr: bool = True) -> None:
-        root = os.path.expanduser(os.path.normpath(root))
-        if not os.path.isdir(root):
+                 predict_unseen_agents: bool = False,                #  预测未见智能体
+                 vector_repr: bool = True) -> None:                  #  向量表示
+        root = os.path.expanduser(os.path.normpath(root))       # 绝对和规范化路径设置
+        if not os.path.isdir(root):                         # 验证路径是否存在
             os.makedirs(root)
-        if split not in ('train', 'val', 'test'):
+        if split not in ('train', 'val', 'test'):          # 验证数据集分割是否有效
             raise ValueError(f'{split} is not a valid split')
         self.split = split
 
-        if raw_dir is None:
+        if raw_dir is None:                  # 设置原始数据目录
             raw_dir = os.path.join(root, split, 'raw')
             self._raw_dir = raw_dir
             if os.path.isdir(self._raw_dir):
@@ -105,7 +106,7 @@ class ArgoverseV2Dataset(Dataset):
             else:
                 self._raw_file_names = []
 
-        if processed_dir is None:
+        if processed_dir is None:           # 设置处理后的数据目录
             processed_dir = os.path.join(root, split, 'processed')
             self._processed_dir = processed_dir
             if os.path.isdir(self._processed_dir):
@@ -132,25 +133,25 @@ class ArgoverseV2Dataset(Dataset):
         self.vector_repr = vector_repr
         self._url = f'https://s3.amazonaws.com/argoverse/datasets/av2/tars/motion-forecasting/{split}.tar'
         self._num_samples = {
-            'train': 199908,
-            'val': 24988,
-            'test': 24984,
+            'train': 400,#199908,
+            'val': 283,#24988,
+            'test': 216,#24984,
         }[split]
         self._agent_types = ['vehicle', 'pedestrian', 'motorcyclist', 'cyclist', 'bus', 'static', 'background',
-                             'construction', 'riderless_bicycle', 'unknown']
-        self._agent_categories = ['TRACK_FRAGMENT', 'UNSCORED_TRACK', 'SCORED_TRACK', 'FOCAL_TRACK']
-        self._polygon_types = ['VEHICLE', 'BIKE', 'BUS', 'PEDESTRIAN']
-        self._polygon_is_intersections = [True, False, None]
+                             'construction', 'riderless_bicycle', 'unknown']                # 定义智能体类型
+        self._agent_categories = ['TRACK_FRAGMENT', 'UNSCORED_TRACK', 'SCORED_TRACK', 'FOCAL_TRACK']   # 定义智能体类别
+        self._polygon_types = ['VEHICLE', 'BIKE', 'BUS', 'PEDESTRIAN']      # 定义多边形
+        self._polygon_is_intersections = [True, False, None]           # 定义是否为交点
         self._point_types = ['DASH_SOLID_YELLOW', 'DASH_SOLID_WHITE', 'DASHED_WHITE', 'DASHED_YELLOW',
                              'DOUBLE_SOLID_YELLOW', 'DOUBLE_SOLID_WHITE', 'DOUBLE_DASH_YELLOW', 'DOUBLE_DASH_WHITE',
                              'SOLID_YELLOW', 'SOLID_WHITE', 'SOLID_DASH_WHITE', 'SOLID_DASH_YELLOW', 'SOLID_BLUE',
-                             'NONE', 'UNKNOWN', 'CROSSWALK', 'CENTERLINE']
-        self._point_sides = ['LEFT', 'RIGHT', 'CENTER']
-        self._polygon_to_polygon_types = ['NONE', 'PRED', 'SUCC', 'LEFT', 'RIGHT']
-        super(ArgoverseV2Dataset, self).__init__(root=root, transform=transform, pre_transform=None, pre_filter=None)
-
+                             'NONE', 'UNKNOWN', 'CROSSWALK', 'CENTERLINE']       # 定义点的类型
+        self._point_sides = ['LEFT', 'RIGHT', 'CENTER']   # 定义点在多边形边上的位置
+        self._polygon_to_polygon_types = ['NONE', 'PRED', 'SUCC', 'LEFT', 'RIGHT']        # 定义多边形之间的类型
+        super(ArgoverseV2Dataset, self).__init__(root=root, transform=transform, pre_transform=None, pre_filter=None)   # 调用父类的构造函数
+    # 将属性改为方法：创建只读属性
     @property
-    def raw_dir(self) -> str:
+    def raw_dir(self) -> str:    # 表示属性返回器返回一个字符串
         return self._raw_dir
 
     @property
@@ -158,7 +159,7 @@ class ArgoverseV2Dataset(Dataset):
         return self._processed_dir
 
     @property
-    def raw_file_names(self) -> Union[str, List[str], Tuple]:
+    def raw_file_names(self) -> Union[str, List[str], Tuple]:   # 表示属性返回器返回一个字符串、字符串列表或元组
         return self._raw_file_names
 
     @property
@@ -168,56 +169,59 @@ class ArgoverseV2Dataset(Dataset):
     def download(self) -> None:
         if not os.path.isfile(os.path.join(self.root, f'{self.split}.tar')):
             print(f'Downloading {self._url}', file=sys.stderr)
-            request.urlretrieve(self._url, os.path.join(self.root, f'{self.split}.tar'))
+            request.urlretrieve(self._url, os.path.join(self.root, f'{self.split}.tar'))           # urlretrieve()函数是直接将远程数据下载到本地， url为下载链接地址
         if os.path.isdir(os.path.join(self.root, self.split)):
-            shutil.rmtree(os.path.join(self.root, self.split))
+            shutil.rmtree(os.path.join(self.root, self.split))                  # shutil.rmtree 函数用于递归地删除self.split的目录以及其中的所有内容
         if os.path.isdir(self.raw_dir):
             shutil.rmtree(self.raw_dir)
-        os.makedirs(self.raw_dir)
-        extract_tar(path=os.path.join(self.root, f'{self.split}.tar'), folder=self.raw_dir, mode='r')
-        self._raw_file_names = [name for name in os.listdir(os.path.join(self.raw_dir, self.split)) if
+        os.makedirs(self.raw_dir)                                            # os.makedirs函数创建了self.raw_dir指定的目录
+        extract_tar(path=os.path.join(self.root, f'{self.split}.tar'), folder=self.raw_dir, mode='r')   # 外部定义的函数,调用extract_tar函数，将 {self.split}.tar 文件解压到 self.raw_dir 目录
+        self._raw_file_names = [name for name in os.listdir(os.path.join(self.raw_dir, self.split)) if        # 列出 {self.split} 目录下的所有子目录，并将它们存储在 self._raw_file_names 列表中
                                 os.path.isdir(os.path.join(self.raw_dir, self.split, name))]
-        for raw_file_name in self.raw_file_names:
-            shutil.move(os.path.join(self.raw_dir, self.split, raw_file_name), self.raw_dir)
-        os.rmdir(os.path.join(self.raw_dir, self.split))
+        for raw_file_name in self.raw_file_names:           # 遍历self.raw_file_names列表中的子目录 # self._raw_file_names和self.raw_file_names有啥不同
+            shutil.move(os.path.join(self.raw_dir, self.split, raw_file_name), self.raw_dir)        # 将每个子目录移动到self.raw_dir目录下
+        os.rmdir(os.path.join(self.raw_dir, self.split))           # 删除现在为空的{self.split}目录
 
+# 定义process方法不接受任何参数，并且没有返回值
     def process(self) -> None:
-        for raw_file_name in tqdm(self.raw_file_names):
-            df = pd.read_parquet(os.path.join(self.raw_dir, raw_file_name, f'scenario_{raw_file_name}.parquet'))
-            map_dir = Path(self.raw_dir) / raw_file_name
-            map_path = map_dir / sorted(map_dir.glob('log_map_archive_*.json'))[0]
-            map_data = read_json_file(map_path)
+        for raw_file_name in tqdm(self.raw_file_names):               # tqdm是一个进度条库，用于在控制台显示进度
+            df = pd.read_parquet(os.path.join(self.raw_dir, raw_file_name, f'scenario_{raw_file_name}.parquet'))     # 用pandas库读取一个Parquet文件
+            map_dir = Path(self.raw_dir) / raw_file_name              # 使用pathlib库创建一个路径对象，指向包含地图数据的目录
+            map_path = map_dir / sorted(map_dir.glob('log_map_archive_*.json'))[0]   # 在map_dir目录中查找所有以log_map_archive_开头的 JSON 文件，并选择第一个文件作为地图数据文件
+            map_data = read_json_file(map_path)              # 读取地图数据json文件，并将内容存储在map_data变量中
             centerlines = {lane_segment['id']: Polyline.from_json_data(lane_segment['centerline'])
-                           for lane_segment in map_data['lane_segments'].values()}
-            map_api = ArgoverseStaticMap.from_json(map_path)
-            data = dict()
-            data['scenario_id'] = self.get_scenario_id(df)
+                           for lane_segment in map_data['lane_segments'].values()}              # 从地图数据中提取车道线信息，并创建一个车道线id到Polyline对象的映射
+            map_api = ArgoverseStaticMap.from_json(map_path)               # 使用ArgoverseStaticMap类从地图数据文件创建一个地图 API 对象
+            data = dict()                 # 创建一个空字典，用于存储处理后的数据
+            data['scenario_id'] = self.get_scenario_id(df)               # 调用self.get_scenario_id，从数据帧df中获取场景id，并将其添加到data字典中
             data['city'] = self.get_city(df)
             data['agent'] = self.get_agent_features(df)
-            data.update(self.get_map_features(map_api, centerlines))
-            with open(os.path.join(self.processed_dir, f'{raw_file_name}.pkl'), 'wb') as handle:
-                pickle.dump(data, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            data.update(self.get_map_features(map_api, centerlines))        # 调用self.get_map_features方法，获取地图特征，并将结果更新到data字典中
+            with open(os.path.join(self.processed_dir, f'{raw_file_name}.pkl'), 'wb') as handle:   # 打开一个raw_file_name文件，并使用pickle序列化数据
+                pickle.dump(data, handle, protocol=pickle.HIGHEST_PROTOCOL)             #使用HIGHEST_PROTOCOL可以确保代码使用的是当前Python版本支持的最新协议
 
+# 定义静态方法
     @staticmethod
-    def get_scenario_id(df: pd.DataFrame) -> str:
+    def get_scenario_id(df: pd.DataFrame) -> str:   # get_scenario_id属于类本身,在没有创建类实例的情况下调用
         return df['scenario_id'].values[0]
 
     @staticmethod
     def get_city(df: pd.DataFrame) -> str:
         return df['city'].values[0]
 
+# 从pandas DataFrame df中提取智能体的特征
     def get_agent_features(self, df: pd.DataFrame) -> Dict[str, Any]:
         if not self.predict_unseen_agents:  # filter out agents that are unseen during the historical time steps
             historical_df = df[df['timestep'] < self.num_historical_steps]
-            agent_ids = list(historical_df['track_id'].unique())
-            df = df[df['track_id'].isin(agent_ids)]
-        else:
+            agent_ids = list(historical_df['track_id'].unique())   # 从历史DataFrame historical_df中获取唯一的track_id
+            df = df[df['track_id'].isin(agent_ids)]               # 更新原始DataFrame df只保留那些track_id出现在历史代理id列表agent_ids中的行
+        else:          # 不筛选智能体，获取DataFrame df中所有唯一的track_id
             agent_ids = list(df['track_id'].unique())
 
         num_agents = len(agent_ids)
-        av_idx = agent_ids.index('AV')
+        av_idx = agent_ids.index('AV')         # 尝试在agent_ids列表中找到代表自动驾驶车辆的索引
 
-        # initialization
+        # initialization  PyTorch库创建张量用于存储和处理代理的特征数据
         valid_mask = torch.zeros(num_agents, self.num_steps, dtype=torch.bool)
         current_valid_mask = torch.zeros(num_agents, dtype=torch.bool)
         predict_mask = torch.zeros(num_agents, self.num_steps, dtype=torch.bool)
@@ -228,6 +232,7 @@ class ArgoverseV2Dataset(Dataset):
         heading = torch.zeros(num_agents, self.num_steps, dtype=torch.float)
         velocity = torch.zeros(num_agents, self.num_steps, self.dim, dtype=torch.float)
 
+# 为每个智能体（由 track_id 标识）填充相关的特征数据到之前初始化的PyTorch张量中
         for track_id, track_df in df.groupby('track_id'):
             agent_idx = agent_ids.index(track_id)
             agent_steps = track_df['timestep'].values
@@ -255,8 +260,8 @@ class ArgoverseV2Dataset(Dataset):
                                                                               track_df['velocity_y'].values],
                                                                              axis=-1)).float()
 
-        if self.split == 'test':
-            predict_mask[current_valid_mask
+        if self.split == 'test':        # 判断数据集分割是否为测试集
+            predict_mask[current_valid_mask                     # 逻辑或运算（|）用于组合这些条件，使得满足任一条件的代理在预测阶段都被标记为有效
                          | (agent_category == 2)
                          | (agent_category == 3), self.num_historical_steps:] = True
 
@@ -273,15 +278,17 @@ class ArgoverseV2Dataset(Dataset):
             'velocity': velocity,
         }
 
+
+# 从地图 API 和车道中心线数据中提取地图特征
     def get_map_features(self,
                          map_api: ArgoverseStaticMap,
                          centerlines: Mapping[str, Polyline]) -> Dict[Union[str, Tuple[str, str, str]], Any]:
         lane_segment_ids = map_api.get_scenario_lane_segment_ids()
         cross_walk_ids = list(map_api.vector_pedestrian_crossings.keys())
         polygon_ids = lane_segment_ids + cross_walk_ids
-        num_polygons = len(lane_segment_ids) + len(cross_walk_ids) * 2
+        num_polygons = len(lane_segment_ids) + len(cross_walk_ids) * 2             # 这里假设每个人行道被表示为两个多边形
 
-        # initialization
+        # initialization     初始化与地图多边形特征相关的一系列属性
         polygon_position = torch.zeros(num_polygons, self.dim, dtype=torch.float)
         polygon_orientation = torch.zeros(num_polygons, dtype=torch.float)
         polygon_height = torch.zeros(num_polygons, dtype=torch.float)
@@ -294,7 +301,7 @@ class ArgoverseV2Dataset(Dataset):
         point_type: List[Optional[torch.Tensor]] = [None] * num_polygons
         point_side: List[Optional[torch.Tensor]] = [None] * num_polygons
 
-        for lane_segment in map_api.get_scenario_lane_segments():
+        for lane_segment in map_api.get_scenario_lane_segments():   # 用于从地图 API map_api 提取车道段的几何特征和语义信息，并将填充到之前初始化的PyTorch张量和列表中
             lane_segment_idx = polygon_ids.index(lane_segment.id)
             centerline = torch.from_numpy(centerlines[lane_segment.id].xyz).float()
             polygon_position[lane_segment_idx] = centerline[0, :self.dim]
@@ -334,7 +341,7 @@ class ArgoverseV2Dataset(Dataset):
                  torch.full((len(right_vectors),), self._point_sides.index('RIGHT'), dtype=torch.uint8),
                  torch.full((len(center_vectors),), self._point_sides.index('CENTER'), dtype=torch.uint8)], dim=0)
 
-        for crosswalk in map_api.get_scenario_ped_crossings():
+        for crosswalk in map_api.get_scenario_ped_crossings():          # 提取人行横道的几何特征和语义信息，并填充到相应的 PyTorch 张量中
             crosswalk_idx = polygon_ids.index(crosswalk.id)
             edge1 = torch.from_numpy(crosswalk.edge1.xyz).float()
             edge2 = torch.from_numpy(crosswalk.edge2.xyz).float()
@@ -350,7 +357,7 @@ class ArgoverseV2Dataset(Dataset):
             polygon_height[crosswalk_idx + len(cross_walk_ids)] = start_position[2] - end_position[2]
             polygon_type[crosswalk_idx] = self._polygon_types.index('PEDESTRIAN')
             polygon_type[crosswalk_idx + len(cross_walk_ids)] = self._polygon_types.index('PEDESTRIAN')
-            polygon_is_intersection[crosswalk_idx] = self._polygon_is_intersections.index(None)
+            polygon_is_intersection[crosswalk_idx] = self._polygon_is_intersections.index(None)  # 标记人行横道是否为交叉路口，这里假设人行横道不是交叉路口
             polygon_is_intersection[crosswalk_idx + len(cross_walk_ids)] = self._polygon_is_intersections.index(None)
 
             if side_to_directed_lineseg((edge1[0] + edge1[-1]) / 2, start_position, end_position) == 'LEFT':
@@ -359,13 +366,13 @@ class ArgoverseV2Dataset(Dataset):
             else:
                 left_boundary = edge2
                 right_boundary = edge1
-            num_centerline_points = math.ceil(torch.norm(end_position - start_position, p=2, dim=-1).item() / 2.0) + 1
+            num_centerline_points = math.ceil(torch.norm(end_position - start_position, p=2, dim=-1).item() / 2.0) + 1   # 生成人行横道的中心线
             centerline = torch.from_numpy(
                 compute_midpoint_line(left_ln_boundary=left_boundary.numpy(),
                                       right_ln_boundary=right_boundary.numpy(),
                                       num_interp_pts=int(num_centerline_points))[0]).float()
 
-            point_position[crosswalk_idx] = torch.cat([left_boundary[:-1, :self.dim],
+            point_position[crosswalk_idx] = torch.cat([left_boundary[:-1, :self.dim],       # 预测行人的过街行为或车辆在接近人行横道时的反应
                                                        right_boundary[:-1, :self.dim],
                                                        centerline[:-1, :self.dim]], dim=0)
             point_position[crosswalk_idx + len(cross_walk_ids)] = torch.cat(
@@ -415,7 +422,7 @@ class ArgoverseV2Dataset(Dataset):
                  torch.full((len(left_vectors),), self._point_sides.index('RIGHT'), dtype=torch.uint8),
                  torch.full((len(center_vectors),), self._point_sides.index('CENTER'), dtype=torch.uint8)], dim=0)
 
-        num_points = torch.tensor([point.size(0) for point in point_position], dtype=torch.long)
+        num_points = torch.tensor([point.size(0) for point in point_position], dtype=torch.long)     # 构建地图上多边形（如车道段和人行横道）之间的拓扑关系
         point_to_polygon_edge_index = torch.stack(
             [torch.arange(num_points.sum(), dtype=torch.long),
              torch.arange(num_polygons, dtype=torch.long).repeat_interleave(num_points)], dim=0)
@@ -503,6 +510,7 @@ class ArgoverseV2Dataset(Dataset):
 
         return map_data
 
+# 管理数据集的加载、下载、处理和存储
     def len(self) -> int:
         return self._num_samples
 

@@ -21,6 +21,7 @@ from torch_scatter import segment_csr
 from losses.laplace_nll_loss import LaplaceNLLLoss
 
 
+
 class MixtureOfLaplaceNLLLoss(nn.Module):
 
     def __init__(self,
@@ -37,7 +38,7 @@ class MixtureOfLaplaceNLLLoss(nn.Module):
                 mask: torch.Tensor,
                 ptr: Optional[torch.Tensor] = None,
                 joint: bool = False) -> torch.Tensor:
-        nll = self.nll_loss(pred=pred, target=target.unsqueeze(1))
+        nll = self.nll_loss(pred=pred, target=target.unsqueeze(1))             # 计算每个拉普拉斯分布的负对数似然损失
         nll = (nll * mask.view(-1, 1, target.size(-2), 1)).sum(dim=(-2, -1))
         if joint:
             if ptr is None:
@@ -47,7 +48,7 @@ class MixtureOfLaplaceNLLLoss(nn.Module):
         else:
             pass
         log_pi = F.log_softmax(prob, dim=-1)
-        loss = -torch.logsumexp(log_pi - nll, dim=-1)
+        loss = -torch.logsumexp(log_pi - nll, dim=-1)      # 计算最终的损失值，这是混合拉普拉斯分布的负对数似然损失。
         if self.reduction == 'mean':
             return loss.mean()
         elif self.reduction == 'sum':

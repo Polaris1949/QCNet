@@ -20,7 +20,6 @@ from metrics.utils import topk
 from metrics.utils import valid_filter
 from utils import wrap_angle
 
-
 class minAHE(Metric):
 
     def __init__(self,
@@ -50,8 +49,9 @@ class minAHE(Metric):
                          valid_mask.unsqueeze(1)).sum(dim=-1).argmin(dim=-1)
         else:
             raise ValueError('{} is not a valid criterion'.format(min_criterion))
+        # wrap_angle 函数用于处理角度数据，确保角度差异在正确的范围内
         self.sum += ((wrap_angle(pred_topk[torch.arange(pred.size(0)), inds_best, :, -1] - target[..., -1]).abs() *
-                      valid_mask).sum(dim=-1) / valid_mask.sum(dim=-1)).sum()
+                      valid_mask).sum(dim=-1) / valid_mask.sum(dim=-1)).sum()                   # 计算预测值和目标值之间的平均角度差异
         self.count += pred.size(0)
 
     def compute(self) -> torch.Tensor:

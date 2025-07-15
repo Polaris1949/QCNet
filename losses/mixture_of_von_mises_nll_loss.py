@@ -21,6 +21,7 @@ from torch_scatter import segment_csr
 from losses.von_mises_nll_loss import VonMisesNLLLoss
 
 
+# 冯·米塞斯分布是一种用于建模周期性数据（如角度数据）的概率分布
 class MixtureOfVonMisesNLLLoss(nn.Module):
 
     def __init__(self,
@@ -37,7 +38,7 @@ class MixtureOfVonMisesNLLLoss(nn.Module):
                 mask: torch.Tensor,
                 ptr: Optional[torch.Tensor] = None,
                 joint: bool = False) -> torch.Tensor:
-        nll = self.nll_loss(pred=pred, target=target.unsqueeze(1))
+        nll = self.nll_loss(pred=pred, target=target.unsqueeze(1))   # 计算每个冯·米塞斯分布的负对数似然损失
         nll = (nll * mask.view(-1, 1, target.size(-2), 1)).sum(dim=(-2, -1))
         if joint:
             if ptr is None:
@@ -46,7 +47,7 @@ class MixtureOfVonMisesNLLLoss(nn.Module):
                 nll = segment_csr(src=nll, indptr=ptr, reduce='sum')
         else:
             pass
-        log_pi = F.log_softmax(prob, dim=-1)
+        log_pi = F.log_softmax(prob, dim=-1)             # 计算混合分布概率的对数
         loss = -torch.logsumexp(log_pi - nll, dim=-1)
         if self.reduction == 'mean':
             return loss.mean()

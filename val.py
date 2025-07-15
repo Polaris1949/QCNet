@@ -20,6 +20,7 @@ from datasets import ArgoverseV2Dataset
 from predictors import QCNet
 from transforms import TargetBuilder
 
+
 if __name__ == '__main__':
     pl.seed_everything(2023, workers=True)
 
@@ -41,8 +42,8 @@ if __name__ == '__main__':
     val_dataset = {
         'argoverse_v2': ArgoverseV2Dataset,
     }[model.dataset](root=args.root, split='val',
-                     transform=TargetBuilder(model.num_historical_steps, model.num_future_steps))
+                     transform=TargetBuilder(model.num_historical_steps, model.num_future_steps))   #TargetBuilder 用于处理轨迹预测，根据模型的输入和输出需求来调整和构建数据
     dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers,
                             pin_memory=args.pin_memory, persistent_workers=args.persistent_workers)
-    trainer = pl.Trainer(accelerator=args.accelerator, devices=args.devices, strategy='ddp')
+    trainer = pl.Trainer(accelerator=args.accelerator, devices=args.devices, strategy='dp')
     trainer.validate(model, dataloader)

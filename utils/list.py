@@ -14,6 +14,7 @@
 from typing import Any, List, Optional
 
 
+# 用于在一个Python列表 ls 中安全地查找元素 elem 的索引
 def safe_list_index(ls: List[Any], elem: Any) -> Optional[int]:
     try:
         return ls.index(elem)

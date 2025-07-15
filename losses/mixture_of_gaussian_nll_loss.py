@@ -21,6 +21,7 @@ from torch_scatter import segment_csr
 from losses.gaussian_nll_loss import GaussianNLLLoss
 
 
+
 class MixtureOfGaussianNLLLoss(nn.Module):
 
     def __init__(self,
@@ -47,7 +48,7 @@ class MixtureOfGaussianNLLLoss(nn.Module):
                 nll = segment_csr(src=nll, indptr=ptr, reduce='sum')
         else:
             pass
-        log_pi = F.log_softmax(prob, dim=-1)
+        log_pi = F.log_softmax(prob, dim=-1)          # 计算每个高斯分布的负对数似然损失。
         loss = -torch.logsumexp(log_pi - nll, dim=-1)
         if self.reduction == 'mean':
             return loss.mean()

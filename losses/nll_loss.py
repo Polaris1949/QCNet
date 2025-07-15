@@ -20,7 +20,6 @@ from losses.gaussian_nll_loss import GaussianNLLLoss
 from losses.laplace_nll_loss import LaplaceNLLLoss
 from losses.von_mises_nll_loss import VonMisesNLLLoss
 
-
 class NLLLoss(nn.Module):
 
     def __init__(self,

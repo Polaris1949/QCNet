@@ -20,6 +20,7 @@ from metrics.utils import topk
 from metrics.utils import valid_filter
 
 
+
 class ProbMR(Metric):
 
     def __init__(self,
@@ -40,15 +41,15 @@ class ProbMR(Metric):
                miss_threshold: float = 2.0) -> None:
         pred, target, prob, valid_mask, _ = valid_filter(pred, target, prob, valid_mask, None, keep_invalid_final_step)
         pred_topk, prob_topk = topk(self.max_guesses, pred, prob)
-        if miss_criterion == 'FDE':
+        if miss_criterion == 'FDE':  # 计算最小误差
             inds_last = (valid_mask * torch.arange(1, valid_mask.size(-1) + 1, device=self.device)).argmax(dim=-1)
             min_fde, inds_best = torch.norm(pred_topk[torch.arange(pred.size(0)), :, inds_last] -
                                             target[torch.arange(pred.size(0)), inds_last].unsqueeze(-2),
                                             p=2, dim=-1).min(dim=-1)
-            self.sum += torch.where(min_fde > miss_threshold,
-                                    1.0,
+            self.sum += torch.where(min_fde > miss_threshold,              # 根据条件选择两个值中的一个，用于更新统计信息
+                                    1.0,                  # 使用torch.where条件选择函数，如果min_fde大于阈值miss_threshold，则累加1到self.sum；否则，累加1-最小误差预测的概率值
                                     1.0 - prob_topk[torch.arange(pred.size(0)), inds_best]).sum()
-        elif miss_criterion == 'MAXDE':
+        elif miss_criterion == 'MAXDE':  # 计算最大误差
             min_maxde, inds_best = ((torch.norm(pred_topk - target.unsqueeze(1), p=2, dim=-1) *
                                      valid_mask.unsqueeze(1)).max(dim=-1)[0]).min(dim=-1)
             self.sum += torch.where(min_maxde > miss_threshold,
