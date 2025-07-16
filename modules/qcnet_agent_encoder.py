@@ -28,22 +28,26 @@ from utils import angle_between_2d_vectors
 from utils import weight_init
 from utils import wrap_angle
 
+from modules.grlc import GRLC
+
 
 class QCNetAgentEncoder(nn.Module):
 
-    def __init__(self,
-                 dataset: str,
-                 input_dim: int,
-                 hidden_dim: int,
-                 num_historical_steps: int,
-                 time_span: Optional[int], # 时间跨度
-                 pl2a_radius: float,       # 从位置到注意力层的半径
-                 a2a_radius: float,        # 注意力到注意力层的半径
-                 num_freq_bands: int,      # 频带的数量
-                 num_layers: int,
-                 num_heads: int,           # 多头注意力机制中的头数
-                 head_dim: int,            # 每个注意力头的维度
-                 dropout: float) -> None:  # 防止过拟合
+    def __init__(
+        self,
+        dataset: str,
+        input_dim: int,           # 2D/3D 场景
+        hidden_dim: int,          # 隐藏层维度
+        num_historical_steps: int,
+        time_span: Optional[int], # 时间跨度
+        pl2a_radius: float,       # 从位置到注意力层的半径
+        a2a_radius: float,        # 注意力到注意力层的半径
+        num_freq_bands: int,      # 频带的数量
+        num_layers: int,          # 注意力层数
+        num_heads: int,           # 多头注意力机制中的头数
+        head_dim: int,            # 每个注意力头的维度
+        dropout: float,           # 防止过拟合
+    ) -> None:
         super(QCNetAgentEncoder, self).__init__()
         self.dataset = dataset
         self.input_dim = input_dim
@@ -128,6 +132,8 @@ class QCNetAgentEncoder(nn.Module):
         head_t = head_a.reshape(-1)              #  将智能体的朝向角度张量head_a重塑为一维张量
         head_vector_t = head_vector_a.reshape(-1, 2)   # 将智能体的朝向向量张量head_vector_a重塑为每个智能体一个二维向量的格式
         mask_t = mask.unsqueeze(2) & mask.unsqueeze(1) # 将有效性掩码mask在两个维度上扩展并进行逐元素的逻辑与操作，以得到一个表示智能体之间关系的掩码
+
+        # 时间相关性计算
         edge_index_t = dense_to_sparse(mask_t)[0]      # 将密集的掩码矩阵转换为稀疏的边索引格式
         edge_index_t = edge_index_t[:, edge_index_t[1] > edge_index_t[0]]    # 过滤边索引，只保留源节点索引小于目标节点索引的边
         edge_index_t = edge_index_t[:, edge_index_t[1] - edge_index_t[0] <= self.time_span]       # 进一步过滤边索引，只保留时间跨度在模型考虑范围内的边
@@ -156,10 +162,12 @@ class QCNetAgentEncoder(nn.Module):
                                    device=pos_a.device).repeat_interleave(data['agent']['num_nodes'])
             batch_pl = torch.arange(self.num_historical_steps,
                                     device=pos_pl.device).repeat_interleave(data['map_polygon']['num_nodes'])
+
+        # 车图相关性计算
         edge_index_pl2a = radius(x=pos_s[:, :2], y=pos_pl[:, :2], r=self.pl2a_radius, batch_x=batch_s, batch_y=batch_pl,
                                  max_num_neighbors=300)   # 使用radius函数根据位置和半径self.pl2a_radius来构建智能体和地图多边形之间的边。max_num_neighbors=300限制了每个节点的最大邻居数量。
         edge_index_pl2a = edge_index_pl2a[:, mask_s[edge_index_pl2a[1]]]  # 使用掩码mask_s过滤边，只保留有效的边
-# 计算智能体和地图多边形之间的相对位置和方向
+        # 计算智能体和地图多边形之间的相对位置和方向
         rel_pos_pl2a = pos_pl[edge_index_pl2a[0]] - pos_s[edge_index_pl2a[1]]
         rel_orient_pl2a = wrap_angle(orient_pl[edge_index_pl2a[0]] - head_s[edge_index_pl2a[1]])
         r_pl2a = torch.stack(        # 将相对位置的欧几里得长度、相对位置和朝向向量之间的夹角、相对方向角度堆叠成一个新的特征向量
@@ -167,9 +175,22 @@ class QCNetAgentEncoder(nn.Module):
              angle_between_2d_vectors(ctr_vector=head_vector_s[edge_index_pl2a[1]], nbr_vector=rel_pos_pl2a[:, :2]),
              rel_orient_pl2a], dim=-1)
         r_pl2a = self.r_pl2a_emb(continuous_inputs=r_pl2a, categorical_embs=None) # 将构建的关系特征向量r_pl2a传递给智能体和地图多边形之间的关系嵌入层self.r_pl2a_emb进行嵌入。
+
+        # 车车相关性计算
         edge_index_a2a = radius_graph(x=pos_s[:, :2], r=self.a2a_radius, batch=batch_s, loop=False, # 使用radius函数根据位置和半径self.pl2a_radius来构建智能体和智能体之间的边
                                       max_num_neighbors=300)                                        # loop=False 表示不添加自循环
         edge_index_a2a = subgraph(subset=mask_s, edge_index=edge_index_a2a)[0]         # 使用subgraph函数和掩码mask_s过滤边，只保留有效的边
+
+
+        # TODO: GRLC
+        # 1. Build model
+        grlc_num_nodes = data['agent']['num_nodes'] * self.num_historical_steps
+        grlc_num_features = self.hidden_dim
+        self.grlc = GRLC(grlc_num_nodes, grlc_num_features, self.hidden_dim,
+                          dim_x=args.dim_x, useact=args.usingact, liner=args.UsingLiner,
+                          dropout=args.dropout, useA=useA)
+
+
         # 计算智能体之间的相对位置和方向
         rel_pos_a2a = pos_s[edge_index_a2a[0]] - pos_s[edge_index_a2a[1]]
         rel_head_a2a = wrap_angle(head_s[edge_index_a2a[0]] - head_s[edge_index_a2a[1]])
@@ -179,7 +200,7 @@ class QCNetAgentEncoder(nn.Module):
              rel_head_a2a], dim=-1)
         r_a2a = self.r_a2a_emb(continuous_inputs=r_a2a, categorical_embs=None)     # 将构建的关系特征向量r_a2a传递给智能体之间的关系嵌入层self.r_a2a_emb进行嵌入
 
-# 通过多层注意力机制来更新智能体的特征表示 x_a
+        # 通过多层注意力机制来更新智能体的特征表示 x_a
         for i in range(self.num_layers):
             x_a = x_a.reshape(-1, self.hidden_dim)    # 将智能体的特征表示x_a重塑为二维张量
             x_a = self.t_attn_layers[i](x_a, r_t, edge_index_t)          # 将重塑后的x_a、关系特征r_t和边索引edge_index_t传递给第i层时间注意力层进行处理

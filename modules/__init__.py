@@ -15,3 +15,6 @@ from modules.qcnet_agent_encoder import QCNetAgentEncoder
 from modules.qcnet_decoder import QCNetDecoder
 from modules.qcnet_encoder import QCNetEncoder
 from modules.qcnet_map_encoder import QCNetMapEncoder
+
+# Below is merged from GRLC.
+from modules.grlc import GRLC_GCN_test
