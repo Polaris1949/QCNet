@@ -19,7 +19,6 @@ from torch_cluster import radius
 from torch_cluster import radius_graph
 from torch_geometric.data import Batch
 from torch_geometric.data import HeteroData
-from torch_geometric.data.remote_backend_utils import num_nodes
 from torch_geometric.utils import dense_to_sparse
 from torch_geometric.utils import subgraph
 
@@ -100,7 +99,8 @@ class QCNetAgentEncoder(nn.Module):
         )
 
         # Build GRLC Model
-        self.natsumi = Natsumi(num_nodes=MAX_NUM_AGENTS*self.num_historical_steps, num_features=self.hidden_dim,
+        # Current approach is time slide window, duration=1
+        self.natsumi = Natsumi(num_nodes=MAX_NUM_AGENTS, num_features=self.hidden_dim,
                                dim=self.hidden_dim, dim_x=GRLC_DIM_X, dropout=self.dropout)
 
         self.apply(weight_init)    # 初始化权重
@@ -194,7 +194,33 @@ class QCNetAgentEncoder(nn.Module):
         edge_index_a2a = subgraph(subset=mask_s, edge_index=edge_index_a2a)[0]         # 使用subgraph函数和掩码mask_s过滤边，只保留有效的边
 
         # TODO: GRLC
-        edge_index_a2a = self.natsumi(x_a, edge_index_a2a)
+        # FIXME: Index out of range during validation stage
+        # print(f'{x_a.shape=}')
+        num_nodes = data['agent']['num_nodes']
+        # 初始化一个空的边索引张量，用于存储处理后的边索引
+        new_edge_index_a2a = torch.empty((2, 0), dtype=torch.long, device=pos_s.device)
+        # Slide time window
+        for t in range(self.num_historical_steps):
+            # 提取当前时间步的特征
+            x_t = x_a.transpose(0, 1)[t]  # 将智能体的特征张量x_a转置并重塑为二维张量
+            # 计算每个时间步的顶点下标范围
+            start_idx = t * num_nodes
+            end_idx = (t + 1) * num_nodes
+            # 过滤边索引，只保留在当前时间步内的边
+            edge_index_a2a_t = edge_index_a2a[:, (edge_index_a2a[0] >= start_idx) & (edge_index_a2a[0] < end_idx) &
+                                              (edge_index_a2a[1] >= start_idx) & (edge_index_a2a[1] < end_idx)]
+            # 将边索引转换为相对于当前时间步的索引
+            edge_index_a2a_t = edge_index_a2a_t - start_idx
+            # 调用Natsumi模型
+            edge_index_a2a_t = self.natsumi(x=x_t, edge_index=edge_index_a2a_t)  # 使用Natsumi模型处理当前时间步的特征和边索引
+            # 将边索引转换为相对于全局的索引
+            edge_index_a2a_t = edge_index_a2a_t + start_idx
+            # 将处理后的边索引添加到新的边索引列表中
+            new_edge_index_a2a = torch.cat([new_edge_index_a2a, edge_index_a2a_t], dim=1)
+            # print(f'{t=}, {x_t.shape=}, {edge_index_a2a_t.shape=}, {new_edge_index_a2a.shape=}')
+
+        edge_index_a2a = new_edge_index_a2a
+        # print(f'{edge_index_a2a.shape=}')
         # FIXED: RuntimeError: element 0 of tensors does not require grad and does not have a grad_fn
         # torch.set_grad_enabled(True)
 

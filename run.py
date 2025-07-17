@@ -35,7 +35,7 @@ if __name__ == '__main__':
             '--num_t2m_steps 30 '
             '--pl2m_radius 150 '
             '--a2m_radius 150 '
-            '--hidden_dim 1 ' # TODO
+            '--hidden_dim 128 ' # TODO
         )
     elif mode == 'val':
         os.system(
