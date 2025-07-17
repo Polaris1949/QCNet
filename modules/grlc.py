@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
+# FIXME: GRLC related is computed on CPU due to 'CUDA out of memory'.
+GRLC_DEVICE = 'cpu'
 
 def cos(x, y):
     bs1 = x.size()[0]
@@ -28,6 +30,7 @@ class AvgReadout(nn.Module):
     def __init__(self):
         super(AvgReadout, self).__init__()
 
+
     def forward(self, seq, msk):
         if msk is None:
             return torch.mean(seq, 1)
@@ -39,13 +42,13 @@ class AvgReadout(nn.Module):
 class GCN(nn.Module):
     def __init__(self, in_ft, out_ft, act, bias=True):
         super(GCN, self).__init__()
-        self.fc = nn.Linear(in_ft, out_ft, bias=True)
-        self.fc_1 = nn.Linear(in_ft, out_ft * 2, bias=True)
-        self.fc_2 = nn.Linear(out_ft * 2, out_ft, bias=False)
-        self.act = nn.PReLU() if act is not None else None
+        self.fc = nn.Linear(in_ft, out_ft, bias=True, device=GRLC_DEVICE)
+        self.fc_1 = nn.Linear(in_ft, out_ft * 2, bias=True, device=GRLC_DEVICE)
+        self.fc_2 = nn.Linear(out_ft * 2, out_ft, bias=False, device=GRLC_DEVICE)
+        self.act = nn.PReLU(device=GRLC_DEVICE) if act is not None else None
 
         if bias:
-            self.bias = nn.Parameter(torch.FloatTensor(out_ft))
+            self.bias = nn.Parameter(torch.FloatTensor(out_ft).to(GRLC_DEVICE))
             self.bias.data.fill_(0.0)
         else:
             self.register_parameter('bias', None)
@@ -179,7 +182,7 @@ class SpGraphAttentionLayer(nn.Module):
         self.special_spmm = SpecialSpmm()
 
     def forward(self, input, adj):
-        dv = 'cuda' if input.is_cuda else 'cpu'
+        dv = GRLC_DEVICE if input.is_cuda else 'cpu'
 
         N = input.size()[0]
         edge = adj.nonzero().t()
@@ -277,7 +280,10 @@ class Discriminator_cluster(nn.Module):
 
 
 def cluster(data, k, temp, num_iter, init, cluster_temp):
-    cuda0 = torch.cuda.is_available()  # False
+    if GRLC_DEVICE == 'cuda':
+        cuda0 = torch.cuda.is_available()  # False
+    else:
+        cuda0 = False
 
     if cuda0:
         mu = init.cuda()
@@ -338,6 +344,7 @@ class Clusterator(nn.Module):
 
 class GRLC(nn.Module):
     def __init__(self, n_nb, n_in, n_h, dim_x=2, useact=False, liner=False, dropout=0.2, useA=True):
+        # TODO: Argument useact and liner is always True. Consider optimizing the code by removing these arguments.
         super(GRLC, self).__init__()
         self.gcn_0 = GCN(n_in, n_h * dim_x, act=None)
         self.gcn_1 = GCN(n_h * dim_x, n_h, act=None)

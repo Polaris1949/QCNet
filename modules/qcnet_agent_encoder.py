@@ -19,6 +19,7 @@ from torch_cluster import radius
 from torch_cluster import radius_graph
 from torch_geometric.data import Batch
 from torch_geometric.data import HeteroData
+from torch_geometric.data.remote_backend_utils import num_nodes
 from torch_geometric.utils import dense_to_sparse
 from torch_geometric.utils import subgraph
 
@@ -28,10 +29,11 @@ from utils import angle_between_2d_vectors
 from utils import weight_init
 from utils import wrap_angle
 
-from modules.grlc import GRLC
+from modules.natsumi import Natsumi
 
 
 class QCNetAgentEncoder(nn.Module):
+    natsumis: Dict[str, Natsumi]
 
     def __init__(
         self,
@@ -94,6 +96,9 @@ class QCNetAgentEncoder(nn.Module):
                             bipartite=False, has_pos_emb=True) for _ in range(num_layers)]
         )
         self.apply(weight_init)    # 初始化权重
+
+        # TODO: GRLC
+        self.natsumis = {}
 
     def forward(self,
                 data: HeteroData,      # 异构数据
@@ -177,19 +182,37 @@ class QCNetAgentEncoder(nn.Module):
         r_pl2a = self.r_pl2a_emb(continuous_inputs=r_pl2a, categorical_embs=None) # 将构建的关系特征向量r_pl2a传递给智能体和地图多边形之间的关系嵌入层self.r_pl2a_emb进行嵌入。
 
         # 车车相关性计算
+        # Vertex index range: range(0, num_historical_steps * num_agents)
+        # Shape of pos_s: (num_historical_steps * num_agents, input_dim)
         edge_index_a2a = radius_graph(x=pos_s[:, :2], r=self.a2a_radius, batch=batch_s, loop=False, # 使用radius函数根据位置和半径self.pl2a_radius来构建智能体和智能体之间的边
                                       max_num_neighbors=300)                                        # loop=False 表示不添加自循环
         edge_index_a2a = subgraph(subset=mask_s, edge_index=edge_index_a2a)[0]         # 使用subgraph函数和掩码mask_s过滤边，只保留有效的边
 
-
         # TODO: GRLC
-        # 1. Build model
-        grlc_num_nodes = data['agent']['num_nodes'] * self.num_historical_steps
-        grlc_num_features = self.hidden_dim
-        self.grlc = GRLC(grlc_num_nodes, grlc_num_features, self.hidden_dim,
-                          dim_x=args.dim_x, useact=args.usingact, liner=args.UsingLiner,
-                          dropout=args.dropout, useA=useA)
-
+        # 1. Get or build model
+        scenario_id = data['scenario_id']
+        assert len(scenario_id) == 1
+        scenario_id = scenario_id[0]
+        natsumi = self.natsumis.get(scenario_id, None)
+        if natsumi is None:
+            grlc_num_nodes = data['agent']['num_nodes'] * self.num_historical_steps
+            grlc_num_features = self.hidden_dim # TODO: Is this OK?
+            # NOTE: dim and dropout are set the same as qcnet
+            natsumi = Natsumi(grlc_num_nodes, grlc_num_features, dim=self.hidden_dim, dim_x=2, dropout=self.dropout)
+            self.natsumis[scenario_id] = natsumi
+        # 2. Gather input
+        # Shape of grlc_x: (num_historical_steps * num_agents, hidden_dim)
+        grlc_x = x_a.transpose(0, 1).reshape(-1, self.hidden_dim)  # 将智能体的特征表示x_a重塑为二维张量
+        grlc_edge_index = edge_index_a2a  # 使用智能体之间的边索引edge_index_a2a作为GRLC的输入
+        natsumi.prepare_data(grlc_x, grlc_edge_index)
+        # 3. Train
+        natsumi.train()
+        # 4. Embed
+        natsumi.embed()
+        # 5. Convert to edge_index
+        edge_index_a2a = natsumi.output_edge_index()
+        # FIXME: RuntimeError: element 0 of tensors does not require grad and does not have a grad_fn
+        torch.set_grad_enabled(True)
 
         # 计算智能体之间的相对位置和方向
         rel_pos_a2a = pos_s[edge_index_a2a[0]] - pos_s[edge_index_a2a[1]]
