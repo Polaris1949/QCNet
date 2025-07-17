@@ -33,6 +33,7 @@ from metrics import minFDE
 from metrics import minFHE
 from modules import QCNetDecoder
 from modules import QCNetEncoder
+from modules.qcnet_agent_encoder import USE_NATSUMI
 
 
 try:
@@ -214,9 +215,11 @@ class QCNet(pl.LightningModule):
         self.log('train_reg_loss_propose', reg_loss_propose, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
         self.log('train_reg_loss_refine', reg_loss_refine, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
         self.log('train_cls_loss', cls_loss, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
-        # loss = reg_loss_propose + reg_loss_refine + cls_loss  # 总损失loss是回归损失和分类损失的和，这个损失将被用于模型的反向传播
-        # TODO: Integrate GRLC loss
-        loss = reg_loss_propose + reg_loss_refine + cls_loss + self.encoder.agent_encoder.natsumi.loss
+        if USE_NATSUMI:
+            # TODO: Integrate GRLC loss
+            loss = reg_loss_propose + reg_loss_refine + cls_loss + self.encoder.agent_encoder.natsumi.loss
+        else:
+            loss = reg_loss_propose + reg_loss_refine + cls_loss  # 总损失loss是回归损失和分类损失的和，这个损失将被用于模型的反向传播
         return loss
 
 # 在模型验证阶段计算和记录损失
