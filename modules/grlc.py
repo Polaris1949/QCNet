@@ -3,8 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
+# TODO: Running device management; fucking tensor.to(GRLC_DEVICE)
 # FIXME: GRLC related is computed on CPU due to 'CUDA out of memory'.
-GRLC_DEVICE = 'cpu'
+# FIXME: CANNOT use CPU if Natsumi is set to a submodule of QCNetEncoder.
+GRLC_DEVICE = 'cuda'
 
 def cos(x, y):
     bs1 = x.size()[0]
@@ -43,6 +45,7 @@ class GCN(nn.Module):
     def __init__(self, in_ft, out_ft, act, bias=True):
         super(GCN, self).__init__()
         self.fc = nn.Linear(in_ft, out_ft, bias=True, device=GRLC_DEVICE)
+        # print(f'__init__: {self.fc.weight.device=}, {self.fc.bias.device=}')
         self.fc_1 = nn.Linear(in_ft, out_ft * 2, bias=True, device=GRLC_DEVICE)
         self.fc_2 = nn.Linear(out_ft * 2, out_ft, bias=False, device=GRLC_DEVICE)
         self.act = nn.PReLU(device=GRLC_DEVICE) if act is not None else None
@@ -64,7 +67,10 @@ class GCN(nn.Module):
 
     #   Shape of seq: (batch, nodes, features)
     def forward(self, seq, adj, sparse=False):
+        # print(f'{seq.device=}')
+        # print(f'forward: {self.fc.weight.device=}, {self.fc.bias.device=}')
         seq_fts = self.fc(seq)
+        # print(f'{seq_fts.device=}')
         if sparse:
             out = torch.unsqueeze(torch.spmm(adj, torch.squeeze(seq_fts, 0)), 0)
         else:
@@ -366,6 +372,7 @@ class GRLC(nn.Module):
         for seq_n_temp in seq_n:
             seq_n_list.append(F.dropout(seq_n_temp, self.dropout, training=self.training))
 
+        # print(f'{seq_a.device=}, {I.device=}')
         h_a_0 = self.gcn_0(seq_a, I)
         h_a_0 = self.act(h_a_0)
 

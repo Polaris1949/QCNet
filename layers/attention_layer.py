@@ -81,6 +81,7 @@ class AttentionLayer(MessagePassing):
             x = x[1]
         if self.has_pos_emb and r is not None:
             r = self.attn_prenorm_r(r)
+        # print(f"Attn.forward, {x.shape=}")
         x = x + self.attn_postnorm(self._attn_block(x_src, x_dst, r, edge_index))
         x = x + self.ff_postnorm(self._ff_block(self.ff_prenorm(x)))
         return x

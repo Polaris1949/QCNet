@@ -31,6 +31,8 @@ from utils import wrap_angle
 
 from modules.natsumi import Natsumi
 
+# GRLC parameters
+MAX_NUM_AGENTS = 128
 
 class QCNetAgentEncoder(nn.Module):
     natsumis: Dict[str, Natsumi]
@@ -95,10 +97,12 @@ class QCNetAgentEncoder(nn.Module):
             [AttentionLayer(hidden_dim=hidden_dim, num_heads=num_heads, head_dim=head_dim, dropout=dropout,
                             bipartite=False, has_pos_emb=True) for _ in range(num_layers)]
         )
-        self.apply(weight_init)    # 初始化权重
 
-        # TODO: GRLC
-        self.natsumis = {}
+        # Build GRLC Model
+        self.natsumi = Natsumi(num_nodes=MAX_NUM_AGENTS*self.num_historical_steps, num_features=self.hidden_dim,
+                               dim=self.hidden_dim, dim_x=2, dropout=self.dropout)
+
+        self.apply(weight_init)    # 初始化权重
 
     def forward(self,
                 data: HeteroData,      # 异构数据
@@ -189,28 +193,7 @@ class QCNetAgentEncoder(nn.Module):
         edge_index_a2a = subgraph(subset=mask_s, edge_index=edge_index_a2a)[0]         # 使用subgraph函数和掩码mask_s过滤边，只保留有效的边
 
         # TODO: GRLC
-        # 1. Get or build model
-        scenario_id = data['scenario_id']
-        assert len(scenario_id) == 1
-        scenario_id = scenario_id[0]
-        natsumi = self.natsumis.get(scenario_id, None)
-        if natsumi is None:
-            grlc_num_nodes = data['agent']['num_nodes'] * self.num_historical_steps
-            grlc_num_features = self.hidden_dim # TODO: Is this OK?
-            # NOTE: dim and dropout are set the same as qcnet
-            natsumi = Natsumi(grlc_num_nodes, grlc_num_features, dim=self.hidden_dim, dim_x=2, dropout=self.dropout)
-            self.natsumis[scenario_id] = natsumi
-        # 2. Gather input
-        # Shape of grlc_x: (num_historical_steps * num_agents, hidden_dim)
-        grlc_x = x_a.transpose(0, 1).reshape(-1, self.hidden_dim)  # 将智能体的特征表示x_a重塑为二维张量
-        grlc_edge_index = edge_index_a2a  # 使用智能体之间的边索引edge_index_a2a作为GRLC的输入
-        natsumi.prepare_data(grlc_x, grlc_edge_index)
-        # 3. Train
-        natsumi.train()
-        # 4. Embed
-        natsumi.embed()
-        # 5. Convert to edge_index
-        edge_index_a2a = natsumi.output_edge_index()
+        edge_index_a2a = self.natsumi(x_a, edge_index_a2a)
         # FIXME: RuntimeError: element 0 of tensors does not require grad and does not have a grad_fn
         torch.set_grad_enabled(True)
 
@@ -231,6 +214,7 @@ class QCNetAgentEncoder(nn.Module):
                               self.hidden_dim).transpose(0, 1).reshape(-1, self.hidden_dim)
             x_a = self.pl2a_attn_layers[i]((map_enc['x_pl'].transpose(0, 1).reshape(-1, self.hidden_dim), x_a), r_pl2a,
                                            edge_index_pl2a)              # 将地图多边形的特征map_enc['x_pl']和智能体的特征x_a传递给第i层智能体与地图多边形注意力层，同时传递关系特征r_pl2a和边索引edge_index_pl2a
+            # print(f"Before attn, {x_a.shape=}")
             x_a = self.a2a_attn_layers[i](x_a, r_a2a, edge_index_a2a)    # 将智能体的特征x_a传递给第i层智能体间注意力层，同时传递关系特征r_a2a和边索引edge_index_a2a
             x_a = x_a.reshape(self.num_historical_steps, -1, self.hidden_dim).transpose(0, 1)   # 在所有注意力层处理完成后，将x_a最终重塑回其原始的时间步维度
 

@@ -33,11 +33,13 @@ def cosine_dist(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     cosine = frac_up / frac_down
     return cosine
 
-class Natsumi:
+class Natsumi(nn.Module):
     def __init__(self, num_nodes: int, num_features: int, dim: int, dim_x: int, dropout: float) -> None:
+        super(Natsumi, self).__init__()
         self.num_nodes = num_nodes
         self.num_features = num_features
         self.num_neg = num_neg_samples  # Number of negative samples
+        self.hidden_dim = dim
         self.model = GRLC(
             n_nb=num_nodes,
             n_in=num_features,
@@ -51,24 +53,38 @@ class Natsumi:
         self.optimiser = torch.optim.Adam(self.model.parameters(), lr=lr, weight_decay=0.0001)
         self.neg_matrices = []  # List to store negative sample matrices, generated randomly
         self.margin_loss = nn.MarginRankingLoss(margin=margin1, reduce=False)
+        self.input_x_norm = nn.LayerNorm([num_nodes, num_features])
+
+    def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
+        # 1. Gather input
+        # Shape of x: (num_agents, num_historical_steps, num_features)
+        # Shape of grlc_x: (num_historical_steps * num_agents, hidden_dim)
+        grlc_x = x.transpose(0, 1).reshape(-1, self.hidden_dim)  # 将智能体的特征表示x_a重塑为二维张量
+        self.prepare_data(grlc_x, edge_index)
+        # 3. Train
+        self.do_train()
+        # 4. Embed
+        self.embed()
+        # 5. Convert to edge_index
+        return self.output_edge_index()
 
     def prepare_data(self, x: torch.Tensor, edge_index: torch.Tensor) -> None:
-        # TODO: Running device management; fucking tensor.to(GRLC_DEVICE)
-        x = x.to(GRLC_DEVICE)
-        edge_index = edge_index.to(GRLC_DEVICE)
-
         # Prepare data for training
-        assert self.num_nodes == x.size(0)
-        assert self.num_features == x.size(1)
+        self.real_num_nodes = x.size(0)
+        # assert self.num_features == x.size(1)
         self.num_edges = edge_index.size(1)
         self.edge_index = edge_index
-        self.x = x
-        self.gen_negative_samples()
+
+        # Pad x to num_nodes
+        x = F.pad(x, (0, 0, 0, self.num_nodes - x.size(0)), mode='constant', value=0.0).to(GRLC_DEVICE)
+        edge_index = edge_index.to(GRLC_DEVICE)
+        # print(f'prepare_data: {self.real_num_nodes=}, {x.shape=}, {edge_index.shape=}')
 
         # x = torch.FloatTensor(x)
         eps = 2.2204e-16
         norm = x.norm(p=1, dim=1, keepdim=True).clamp(min=0.) + eps
         x = x.div(norm.expand_as(x))
+        self.x = x
 
         i = edge_index.long()
         v = torch.FloatTensor(torch.ones([self.num_edges])).to(GRLC_DEVICE)
@@ -80,6 +96,8 @@ class Natsumi:
         self.A_I_nomal = normalize_graph(self.A_I)
         self.I_input = torch.eye(self.A_I_nomal.shape[1]).to(GRLC_DEVICE)
 
+        self.gen_negative_samples()
+
     def gen_negative_samples(self) -> None:
         x = self.x
         feature_n = []
@@ -90,7 +108,8 @@ class Natsumi:
             feature_n.append(feature_temp)
         self.neg_matrices = feature_n
 
-    def train(self) -> None:
+    def do_train(self) -> None:
+        # print('do_train')
         model = self.model
         model.train()
         # FIXME: RuntimeError: element 0 of tensors does not require grad and does not have a grad_fn
@@ -145,6 +164,7 @@ class Natsumi:
         self.optimiser.step()
 
     def embed(self) -> None:
+        # print('embed')
         model = self.model
         model.eval()
         # FIXME: RuntimeError: element 0 of tensors does not require grad and does not have a grad_fn
@@ -154,8 +174,6 @@ class Natsumi:
         self.h_a, self.h_p = model.embed(feature_a, feature_p, feature_n, self.A_I_nomal, I=self.I_input)
 
     def output_edge_index(self) -> torch.Tensor:
-        h_p = self.h_p
-
         # NOTE: Following code runs under certain condition: args.dataset_name in ['Cora', 'CiteSeer']
         s_a = cosine_dist(self.h_a, self.h_a).detach()
         S = (torch.stack(self.s_n_cosin_list).mean(dim=0).expand_as(self.A_I) - s_a).detach()
@@ -170,10 +188,11 @@ class Natsumi:
         # END NOTE
 
         # Convert adjacency matrix attention_N to edge index
-        edge_index = attention_N.nonzero().t()
+        edge_index = attention_N.nonzero().t().long()
         # edge_index = edge_index[:, edge_index[0] != edge_index[1]]
         # NOTE: The graph is undirected, so we only keep one direction of edges.
         edge_index = edge_index[:, edge_index[0] < edge_index[1]]
-        edge_index = edge_index.long()
+        # Remove padding nodes from edge_index
+        edge_index = edge_index[:, edge_index[1] < self.real_num_nodes]
+        # print(f'output_edge_index: {edge_index.shape=}')
         return edge_index
-
