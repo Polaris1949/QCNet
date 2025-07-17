@@ -1,10 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
 
 # TODO: Running device management; fucking tensor.to(GRLC_DEVICE)
-# FIXME: GRLC related is computed on CPU due to 'CUDA out of memory'.
 # FIXME: CANNOT use CPU if Natsumi is set to a submodule of QCNetEncoder.
 GRLC_DEVICE = 'cuda'
 
@@ -45,9 +43,11 @@ class GCN(nn.Module):
     def __init__(self, in_ft, out_ft, act, bias=True):
         super(GCN, self).__init__()
         self.fc = nn.Linear(in_ft, out_ft, bias=True, device=GRLC_DEVICE)
-        # print(f'__init__: {self.fc.weight.device=}, {self.fc.bias.device=}')
-        self.fc_1 = nn.Linear(in_ft, out_ft * 2, bias=True, device=GRLC_DEVICE)
-        self.fc_2 = nn.Linear(out_ft * 2, out_ft, bias=False, device=GRLC_DEVICE)
+
+        # FUCK: Following 2 unused parameters cause DDP boom
+        # self.fc_1 = nn.Linear(in_ft, out_ft * 2, bias=True, device=GRLC_DEVICE)
+        # self.fc_2 = nn.Linear(out_ft * 2, out_ft, bias=False, device=GRLC_DEVICE)
+
         self.act = nn.PReLU(device=GRLC_DEVICE) if act is not None else None
 
         if bias:

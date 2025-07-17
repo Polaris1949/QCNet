@@ -18,13 +18,14 @@ from pytorch_lightning.callbacks import LearningRateMonitor
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.strategies import DDPStrategy
 
-
-
-
-
 from datamodules import ArgoverseV2DataModule
 from predictors import QCNet
 
+
+import warnings
+
+# 忽略UserWarning
+warnings.filterwarnings("ignore", category=UserWarning)
 
 
 if __name__ == '__main__':

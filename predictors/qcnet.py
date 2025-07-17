@@ -73,6 +73,7 @@ class QCNet(pl.LightningModule):
                  submission_dir: str,         # 提交文件的目录
                  submission_file_name: str,   # 提交文件的名称
                  **kwargs) -> None:
+        # FIXME: RuntimeError: It looks like your LightningModule has parameters that were not used in producing the loss returned by training_step.
         super(QCNet, self).__init__()
         self.save_hyperparameters()
         self.dataset = dataset
@@ -160,6 +161,12 @@ class QCNet(pl.LightningModule):
         pred = self.decoder(data, scene_enc)  # 将 data 和 scene_enc 作为参数传递
         return pred
 
+    # FIXED: DDP boom, FUCKing GRLC, see grlc.py
+    # def on_after_backward(self):
+    #     for name, param in self.named_parameters():
+    #         if param.grad is None:
+    #             print(name)
+
 # 训练步骤函数，用于处理序列预测问题
     def training_step(self,
                       data,
@@ -207,7 +214,9 @@ class QCNet(pl.LightningModule):
         self.log('train_reg_loss_propose', reg_loss_propose, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
         self.log('train_reg_loss_refine', reg_loss_refine, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
         self.log('train_cls_loss', cls_loss, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
-        loss = reg_loss_propose + reg_loss_refine + cls_loss  # 总损失loss是回归损失和分类损失的和，这个损失将被用于模型的反向传播
+        # loss = reg_loss_propose + reg_loss_refine + cls_loss  # 总损失loss是回归损失和分类损失的和，这个损失将被用于模型的反向传播
+        # TODO: Integrate GRLC loss
+        loss = reg_loss_propose + reg_loss_refine + cls_loss + self.encoder.agent_encoder.natsumi.loss
         return loss
 
 # 在模型验证阶段计算和记录损失
@@ -352,6 +361,10 @@ class QCNet(pl.LightningModule):
                                     nn.LSTMCell, nn.GRU, nn.GRUCell)
         blacklist_weight_modules = (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.LayerNorm, nn.Embedding)
         for module_name, module in self.named_modules():  # 循环遍历模型中的所有模块
+            # TODO: Integrate GRLC optimizers
+            # if module_name.startswith('encoder.agent_encoder.natsumi'):
+            #     continue
+            # print(f'{module_name=}')
             for param_name, param in module.named_parameters():     # 循环遍历模中块的所有参数
                 full_param_name = '%s.%s' % (module_name, param_name) if module_name else param_name      #创建一个包含模块名称和参数名称的完整参数名称
                 if 'bias' in param_name:

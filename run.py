@@ -34,7 +34,8 @@ if __name__ == '__main__':
             '--a2a_radius 50 '
             '--num_t2m_steps 30 '
             '--pl2m_radius 150 '
-            '--a2m_radius 150'
+            '--a2m_radius 150 '
+            '--hidden_dim 1 ' # TODO
         )
     elif mode == 'val':
         os.system(

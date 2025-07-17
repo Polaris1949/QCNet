@@ -53,7 +53,6 @@ class Natsumi(nn.Module):
         self.optimiser = torch.optim.Adam(self.model.parameters(), lr=lr, weight_decay=0.0001)
         self.neg_matrices = []  # List to store negative sample matrices, generated randomly
         self.margin_loss = nn.MarginRankingLoss(margin=margin1, reduce=False)
-        self.input_x_norm = nn.LayerNorm([num_nodes, num_features])
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
         # 1. Gather input
@@ -112,9 +111,10 @@ class Natsumi(nn.Module):
         # print('do_train')
         model = self.model
         model.train()
-        # FIXME: RuntimeError: element 0 of tensors does not require grad and does not have a grad_fn
-        torch.set_grad_enabled(True)
-        self.optimiser.zero_grad()
+        # FIXED: RuntimeError: element 0 of tensors does not require grad and does not have a grad_fn
+        # Move loss calculation and optimiser step to QCNet.training_step()
+        # torch.set_grad_enabled(True)
+        # self.optimiser.zero_grad()
         nb_nodes = self.num_nodes
 
         feature_X = self.x
@@ -156,19 +156,21 @@ class Natsumi(nn.Module):
             i += 1
         mask_margin_N = mask_margin_N / self.num_neg
         string_1 = " loss_1: {:.3f}||loss_2: {:.3f}||".format(loss_mar.item(), mask_margin_N.item())
-        loss = loss_mar * w_loss1 + mask_margin_N * w_loss2 / nb_nodes
+        self.loss = loss_mar * w_loss1 + mask_margin_N * w_loss2 / nb_nodes
         # NOTE: Following code runs under certain condition: args.dataset_name in ['Cora']
         # loss = loss_mar * w_loss1 + mask_margin_N * w_loss2
         # END NOTE
-        loss.backward()
-        self.optimiser.step()
+
+        # DONE: Integrate loss
+        # self.loss.backward()
+        # self.optimiser.step()
 
     def embed(self) -> None:
         # print('embed')
         model = self.model
         model.eval()
-        # FIXME: RuntimeError: element 0 of tensors does not require grad and does not have a grad_fn
-        torch.set_grad_enabled(False)
+        # FIXED: RuntimeError: element 0 of tensors does not require grad and does not have a grad_fn
+        # torch.set_grad_enabled(False)
         feature_a = feature_p = self.x
         feature_n = self.neg_matrices
         self.h_a, self.h_p = model.embed(feature_a, feature_p, feature_n, self.A_I_nomal, I=self.I_input)

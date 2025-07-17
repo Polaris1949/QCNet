@@ -32,7 +32,8 @@ from utils import wrap_angle
 from modules.natsumi import Natsumi
 
 # GRLC parameters
-MAX_NUM_AGENTS = 128
+MAX_NUM_AGENTS = 100
+GRLC_DIM_X = 1
 
 class QCNetAgentEncoder(nn.Module):
     natsumis: Dict[str, Natsumi]
@@ -100,7 +101,7 @@ class QCNetAgentEncoder(nn.Module):
 
         # Build GRLC Model
         self.natsumi = Natsumi(num_nodes=MAX_NUM_AGENTS*self.num_historical_steps, num_features=self.hidden_dim,
-                               dim=self.hidden_dim, dim_x=2, dropout=self.dropout)
+                               dim=self.hidden_dim, dim_x=GRLC_DIM_X, dropout=self.dropout)
 
         self.apply(weight_init)    # 初始化权重
 
@@ -194,8 +195,8 @@ class QCNetAgentEncoder(nn.Module):
 
         # TODO: GRLC
         edge_index_a2a = self.natsumi(x_a, edge_index_a2a)
-        # FIXME: RuntimeError: element 0 of tensors does not require grad and does not have a grad_fn
-        torch.set_grad_enabled(True)
+        # FIXED: RuntimeError: element 0 of tensors does not require grad and does not have a grad_fn
+        # torch.set_grad_enabled(True)
 
         # 计算智能体之间的相对位置和方向
         rel_pos_a2a = pos_s[edge_index_a2a[0]] - pos_s[edge_index_a2a[1]]
