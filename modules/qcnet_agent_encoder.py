@@ -28,12 +28,16 @@ from utils import angle_between_2d_vectors
 from utils import weight_init
 from utils import wrap_angle
 
-from modules.natsumi import Natsumi
+from modules.natsumi import Natsumi, slide_sequence
 
 # GRLC parameters
 MAX_NUM_AGENTS = 135
 GRLC_DIM_X = 1
 USE_NATSUMI = True  # 是否使用Natsumi模型
+
+# Time slide window parameters
+SLIDE_WIDTH = 1
+SLIDE_STEP = 1  # TODO: Implement step>=2 correctly
 
 class QCNetAgentEncoder(nn.Module):
     def __init__(
@@ -98,9 +102,8 @@ class QCNetAgentEncoder(nn.Module):
         )
 
         if USE_NATSUMI:
-            # Build GRLC Model
-            # Current approach is time slide window, duration=1
-            self.natsumi = Natsumi(num_nodes=MAX_NUM_AGENTS, num_features=self.hidden_dim,
+            # Build GRLC Model, use time slide window
+            self.natsumi = Natsumi(num_steps=SLIDE_WIDTH, num_agents=MAX_NUM_AGENTS, num_features=self.hidden_dim,
                                    dim=self.hidden_dim, dim_x=GRLC_DIM_X, dropout=self.dropout)
 
         self.apply(weight_init)    # 初始化权重
@@ -156,7 +159,7 @@ class QCNetAgentEncoder(nn.Module):
              edge_index_t[0] - edge_index_t[1]], dim=-1)
         r_t = self.r_t_emb(continuous_inputs=r_t, categorical_embs=None) # 将构建的关系特征向量r_t传递给关系时间嵌入层self.r_t_emb进行嵌入
 
-        pos_s = pos_a.transpose(0, 1).reshape(-1, self.input_dim)   # 首先将智能体的位置张量pos_a进行转置，使得历史步骤成为第一个维度，然后重塑为一维索引，每个代理一个位置向量
+        pos_s = pos_a.transpose(0, 1).reshape(-1, self.input_dim)   # [T*A,D] 首先将智能体的位置张量pos_a进行转置，使得历史步骤成为第一个维度，然后重塑为一维索引，每个代理一个位置向量
         head_s = head_a.transpose(0, 1).reshape(-1)           # 将智能体的朝向角度张量head_a进行转置并重塑，使得历史步骤成为第一个维度
         head_vector_s = head_vector_a.transpose(0, 1).reshape(-1, 2)   # 将智能体的朝向向量张量head_vector_a进行转置并重塑，使得历史步骤成为第一个维度，每个代理一个二维朝向向量
         mask_s = mask.transpose(0, 1).reshape(-1)        # 将有效掩码进行转置并重塑，使得历史步骤成为第一个维度
@@ -174,6 +177,7 @@ class QCNetAgentEncoder(nn.Module):
                                     device=pos_pl.device).repeat_interleave(data['map_polygon']['num_nodes'])
 
         # 车图相关性计算
+        # N=T*A
         edge_index_pl2a = radius(x=pos_s[:, :2], y=pos_pl[:, :2], r=self.pl2a_radius, batch_x=batch_s, batch_y=batch_pl,
                                  max_num_neighbors=300)   # 使用radius函数根据位置和半径self.pl2a_radius来构建智能体和地图多边形之间的边。max_num_neighbors=300限制了每个节点的最大邻居数量。
         edge_index_pl2a = edge_index_pl2a[:, mask_s[edge_index_pl2a[1]]]  # 使用掩码mask_s过滤边，只保留有效的边
@@ -199,24 +203,26 @@ class QCNetAgentEncoder(nn.Module):
             # FIXME: Index out of range during validation stage
             # print(f'{x_a.shape=}')
             num_nodes = data['agent']['num_nodes']
+            grlc_x_a = x_a.transpose(0, 1)  # 将智能体的特征张量x_a转置，使得历史步骤成为第一个维度
             # 初始化一个空的边索引张量，用于存储处理后的边索引
             new_edge_index_a2a = torch.empty((2, 0), dtype=torch.long, device=pos_s.device)
             # Slide time window
-            for t in range(self.num_historical_steps):
-                # 提取当前时间步的特征
-                x_t = x_a.transpose(0, 1)[t]  # 将智能体的特征张量x_a转置并提取为二维张量[A,D]
+            for t, x_t in slide_sequence(grlc_x_a, SLIDE_WIDTH, SLIDE_STEP):  # 使用slide_sequence函数滑动时间窗口，获取每个时间步的特征
                 # 计算每个时间步的顶点下标范围
-                start_idx = t * num_nodes
-                end_idx = (t + 1) * num_nodes
+                beg_idx = t * num_nodes
+                end_idx = (t + SLIDE_WIDTH) * num_nodes
                 # 过滤边索引，只保留在当前时间步内的边
-                edge_index_a2a_t = edge_index_a2a[:, (edge_index_a2a[0] >= start_idx) & (edge_index_a2a[0] < end_idx) &
-                                                  (edge_index_a2a[1] >= start_idx) & (edge_index_a2a[1] < end_idx)]
+                edge_index_a2a_t = edge_index_a2a[:, (edge_index_a2a[0] >= beg_idx) & (edge_index_a2a[0] < end_idx) &
+                                                  (edge_index_a2a[1] >= beg_idx) & (edge_index_a2a[1] < end_idx)]
                 # 将边索引转换为相对于当前时间步的索引
-                edge_index_a2a_t = edge_index_a2a_t - start_idx
+                edge_index_a2a_t = edge_index_a2a_t - beg_idx
                 # 调用Natsumi模型
                 edge_index_a2a_t = self.natsumi(x=x_t, edge_index=edge_index_a2a_t)  # 使用Natsumi模型处理当前时间步的特征和边索引
                 # 将边索引转换为相对于全局的索引
-                edge_index_a2a_t = edge_index_a2a_t + start_idx
+                edge_index_a2a_t = edge_index_a2a_t + beg_idx
+                if t >= SLIDE_STEP:
+                    beg_idx = (t + SLIDE_WIDTH - SLIDE_STEP) * num_nodes  # 更新起始索引
+                    edge_index_a2a_t = edge_index_a2a_t[:, edge_index_a2a_t[0] >= beg_idx]  # 过滤边索引，只保留在当前时间步内的边
                 # 将处理后的边索引添加到新的边索引列表中
                 new_edge_index_a2a = torch.cat([new_edge_index_a2a, edge_index_a2a_t], dim=1)
                 # print(f'{t=}, {x_t.shape=}, {edge_index_a2a_t.shape=}, {new_edge_index_a2a.shape=}')

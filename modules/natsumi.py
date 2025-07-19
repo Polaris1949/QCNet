@@ -15,6 +15,65 @@ my_margin_2 = margin1 + margin2
 # Algorithm parameters.
 num_neg_samples = 10
 
+def slide_sequence(seq, num, step):
+    """
+    将序列按每num个元素以step步进打包，返回迭代器。
+
+    Args:
+        seq: 输入序列
+        num: 每个分组的元素数量
+        step: 每次移动的步长
+
+    Yields:
+        tuple: 包含num个元素的元组
+    """
+    for i in range(0, len(seq) - num + 1, step):
+        yield i, seq[i:i + num]
+
+
+def filter_edges_unified(edge_index, num_steps, num_agents, limit):
+    """
+    筛选边集张量中顶点编号在所有 range(i, i*num_agents+limit) 并集内的边，
+    并将顶点编号从 i*num_agents+j 映射为 i*limit+j，其中 j 在 range(limit)。
+
+    Args:
+        edge_index (torch.Tensor): 边集张量，形状 [2, num_edges]，每列为 [source_node, target_node]
+        num_steps (int): 步数
+        num_agents (int): 每个步长的代理数
+        limit (int): 顶点编号的范围限制
+
+    Returns:
+        torch.Tensor: 筛选并重新映射顶点编号后的边集张量，形状 [2, num_filtered_edges]
+    """
+    # 生成所有 node_range 的并集
+    node_set = set()
+    for i in range(num_steps):
+        node_set.update(range(i, i * num_agents + limit))
+
+    # 转换为布尔掩码
+    node_mask = torch.tensor([n in node_set for n in range(edge_index.max() + 1)],
+                             dtype=torch.bool, device=edge_index.device)
+
+    # 筛选边：起点和终点都在 node_set 内
+    edge_mask = node_mask[edge_index[0]] & node_mask[edge_index[1]]
+    filtered_edge = edge_index[:, edge_mask]
+
+    # 创建顶点编号映射：从 i*num_agents+j 映射到 i*limit+j
+    mapping = {}
+    for i in range(num_steps):
+        for j in range(limit):
+            old_node = i * num_agents + j
+            if old_node in node_set:  # 仅映射在 node_set 内的顶点
+                new_node = i * limit + j
+                mapping[old_node] = new_node
+
+    # 应用映射到筛选后的边集
+    mapped_edge = filtered_edge
+    for old_node, new_node in mapping.items():
+        mapped_edge[mapped_edge == old_node] = new_node
+
+    return mapped_edge
+
 def normalize_graph(A: torch.Tensor) -> torch.Tensor:
     eps = 2.2204e-16
     deg_inv_sqrt = (A.sum(dim=-1).clamp(min=0.) + eps).pow(-0.5)
@@ -34,14 +93,16 @@ def cosine_dist(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     return cosine
 
 class Natsumi(nn.Module):
-    def __init__(self, num_nodes: int, num_features: int, dim: int, dim_x: int, dropout: float) -> None:
+    def __init__(self, num_steps: int, num_agents: int, num_features: int, dim: int, dim_x: int, dropout: float) -> None:
         super(Natsumi, self).__init__()
-        self.num_nodes = num_nodes
+        self.num_steps = num_steps
+        self.num_agents = num_agents
+        self.num_nodes = num_steps * num_agents  # Total number of nodes
         self.num_features = num_features
         self.num_neg = num_neg_samples  # Number of negative samples
         self.hidden_dim = dim
         self.model = GRLC(
-            n_nb=num_nodes,
+            n_nb=self.num_nodes,
             n_in=num_features,
             n_h=dim,     # Set the same as qcnet.hidden_dim
             dim_x=dim_x, # Hidden dim multiplier
@@ -56,10 +117,8 @@ class Natsumi(nn.Module):
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
         # 1. Gather input
-        # Shape of x: (num_agents, num_historical_steps, num_features)
-        # Shape of grlc_x: (num_historical_steps * num_agents, hidden_dim)
-        grlc_x = x.transpose(0, 1).reshape(-1, self.hidden_dim)  # 将智能体的特征表示x_a重塑为二维张量
-        self.prepare_data(grlc_x, edge_index)
+        # Shape of x: (num_historical_steps, num_agents, hidden_dim)
+        self.prepare_data(x, edge_index)
         # 3. Train
         self.do_train()
         # 4. Embed
@@ -69,13 +128,14 @@ class Natsumi(nn.Module):
 
     def prepare_data(self, x: torch.Tensor, edge_index: torch.Tensor) -> None:
         # Prepare data for training
-        self.real_num_nodes = x.size(0)
+        self.real_num_agents = x.size(1)
         # assert self.num_features == x.size(1)
         self.num_edges = edge_index.size(1)
         self.edge_index = edge_index
 
-        # Pad x to num_nodes
-        x = F.pad(x, (0, 0, 0, self.num_nodes - x.size(0)), mode='constant', value=0.0).to(GRLC_DEVICE)
+        # Pad x to num_nodes and reshape
+        # TODO: Set parameters in self
+        x = F.pad(x, (0, 0, 0, self.num_agents - self.real_num_agents, 0, 0)).reshape(-1, self.hidden_dim).to(GRLC_DEVICE)
         edge_index = edge_index.to(GRLC_DEVICE)
         # print(f'prepare_data: {self.real_num_nodes=}, {x.shape=}, {edge_index.shape=}')
 
@@ -191,10 +251,11 @@ class Natsumi(nn.Module):
 
         # Convert adjacency matrix attention_N to edge index
         edge_index = attention_N.nonzero().t().long()
-        # edge_index = edge_index[:, edge_index[0] != edge_index[1]]
-        # NOTE: The graph is undirected, so we only keep one direction of edges.
+        # FIXME: Algorithm triggers CUDA IndexError, filter range directly as a workaround
+        # edge_index = filter_edges_unified(edge_index, self.num_steps, self.num_agents, self.real_num_agents)
+        # Theoretic-incorrect code
+        # The graph is undirected, so we only keep one direction of edges.
         edge_index = edge_index[:, edge_index[0] < edge_index[1]]
         # Remove padding nodes from edge_index
-        edge_index = edge_index[:, edge_index[1] < self.real_num_nodes]
-        # print(f'output_edge_index: {edge_index.shape=}')
+        edge_index = edge_index[:, edge_index[1] < self.num_steps * self.real_num_agents]
         return edge_index

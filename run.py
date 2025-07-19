@@ -36,6 +36,7 @@ if __name__ == '__main__':
             '--pl2m_radius 150 '
             '--a2m_radius 150 '
             '--hidden_dim 128 ' # TODO
+            '--max_epochs 1000000 '
         )
     elif mode == 'val':
         os.system(
