@@ -5,6 +5,13 @@ from dataclasses import dataclass
 from typing import Any, Tuple, List, Optional
 from itertools import chain
 
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.stats import gaussian_kde
+
+MAX_NUM_AGENTS = 135
+MAX_DISTANCE = 200.0 # 196.14
+
 @dataclass
 class AstreaAgent:
     valid_mask: torch.Tensor # [92, 110]
@@ -37,6 +44,20 @@ class AstreaAgent:
         vel_t = self.velocity[agent_idx][step_idx][:2]
         return pos_t, theta_t, vel_t
 
+    def radius(self, r: int):
+        from torch_cluster import radius
+        pos_x = self.position[:-1, :, :2].reshape(-1, 2)
+        pos_y = self.position[-1, :, :2].reshape(-1, 2)
+        edge_index = radius(pos_x, pos_y, r, max_num_neighbors=100)
+        mask_x = self.valid_mask[:-1, :].reshape(-1)
+        mask_y = self.valid_mask[-1, :].reshape(-1)
+        edge_mask = mask_x[edge_index[1]] & mask_y[edge_index[0]]
+        edge_index = edge_index[:, edge_mask]
+        agent_ids = edge_index[1] // self.num_steps
+        step_ids = edge_index[1] % self.num_steps
+        distances = torch.norm(pos_x[edge_index[1]] - pos_y[edge_index[0]], p=2, dim=1)
+        return agent_ids, step_ids, distances
+
     def __repr__(self) -> str:
         return (
             f"AstreaAgent(num_nodes={self.num_nodes}, num_steps={self.num_steps}, "
@@ -52,27 +73,70 @@ class AstreaScene:
     agent: AstreaAgent
 
     @classmethod
-    def parse(cls, data: Any) -> "AstreaScene":
-        _agent = data['agent']
-        _num_nodes = _agent['num_nodes']
-        _av_index = int(_agent['av_index'][0])
-        assert _num_nodes == _av_index + 1
+    def from_batch(cls, data: Any) -> List["AstreaScene"]:
+        batch_size = len(data['scenario_id'])
+        o = []
 
-        return cls(
-            scenario_id=data['scenario_id'][0],
-            city=data['city'][0],
-            agent=AstreaAgent(
-                valid_mask=_agent['valid_mask'],
-                predict_mask=_agent['predict_mask'],
-                id=_agent['id'][0],
-                type=_agent['type'],
-                category=_agent['category'],
-                position=_agent['position'],
-                heading=_agent['heading'],
-                velocity=_agent['velocity'],
-            ),
-        )
+        for i in range(batch_size):
+            agent = data['agent']
+            ptr_beg = agent['ptr'][i]
+            ptr_end = agent['ptr'][i + 1]
+            num_nodes = ptr_end - ptr_beg
+            av_index = int(agent['av_index'][i])
+            assert num_nodes == av_index + 1
 
+            o.append(cls(
+                scenario_id=data['scenario_id'][i],
+                city=data['city'][i],
+                agent=AstreaAgent(
+                    valid_mask=agent['valid_mask'][ptr_beg:ptr_end],
+                    predict_mask=agent['predict_mask'][ptr_beg:ptr_end],
+                    id=agent['id'][i],
+                    type=agent['type'][ptr_beg:ptr_end],
+                    category=agent['category'][ptr_beg:ptr_end],
+                    position=agent['position'][ptr_beg:ptr_end],
+                    heading=agent['heading'][ptr_beg:ptr_end],
+                    velocity=agent['velocity'][ptr_beg:ptr_end],
+                )
+            ))
+
+        return o
+
+def plot_density(y_samples):
+    # Convert torch tensor to numpy array if needed
+    if isinstance(y_samples, torch.Tensor):
+        y_samples = y_samples.detach().cpu().numpy()
+
+    # Ensure y_samples is 1D
+    y_samples = np.ravel(y_samples)
+
+    # Perform kernel density estimation
+    kde = gaussian_kde(y_samples)
+
+    # Create x values for the plot (0 to 200)
+    x = np.linspace(0, 200, 1000)
+
+    # Calculate density values
+    density = kde(x)
+
+    # Normalize density to ensure area under curve equals 1
+    area = np.trapz(density, x)
+    density = density / area
+
+    # Create the plot
+    plt.figure(figsize=(10, 6))
+    plt.plot(x, density, 'b-', label='Density')
+    plt.fill_between(x, density, alpha=0.2)
+    plt.xlabel('y values')
+    plt.ylabel('Density')
+    plt.title('Density Plot of y_samples')
+    plt.xlim(0, 200)
+    plt.ylim(bottom=0)
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.show()
+
+    return x, density
 
 if __name__ == '__main__':
     # 准备数据集Av2
@@ -87,9 +151,27 @@ if __name__ == '__main__':
     val_dataloader = datamodule.val_dataloader()
     test_dataloader = datamodule.test_dataloader()
     max_num_agents = 0
+    max_distance = 0.0
+    max_dists = []
+    dists = []
 
     for data in chain(train_dataloader, val_dataloader, test_dataloader):  # 遍历各个场景下车辆的数据集
-        scene = AstreaScene.parse(data)
-        max_num_agents = max(max_num_agents, scene.agent.num_nodes)
+        for scene in AstreaScene.from_batch(data):
+            # print(scene.agent)
+            max_num_agents = max(max_num_agents, scene.agent.num_nodes)
+            agent_ids, step_ids, local_dists = scene.agent.radius(200)
+            dists.append(local_dists)
+            # print(f"Scenario {scene.scenario_id}, Agent {agent_id}, Step {step_id}, Distance {dist:.2f}")
+            local_max_dist = torch.max(local_dists).item()
+            max_dists.append(local_max_dist)
+            print(f'{scene.scenario_id=}, {local_max_dist=:.2f}')
+            max_distance = max(max_distance, local_max_dist)
 
     print(f'{max_num_agents=}')
+    print(f'{max_distance=:.2f}')
+    max_dists = torch.tensor(max_dists)
+    print("Figure 1")
+    plot_density(max_dists)
+    dists = torch.cat(dists, dim=0).reshape(-1)
+    print("Figure 2")
+    plot_density(dists)

@@ -42,5 +42,5 @@ if __name__ == '__main__':
     }[model.dataset](root=args.root, split='test')
     dataloader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers,    # 数据加载器：在测试时加载数据
                             pin_memory=args.pin_memory, persistent_workers=args.persistent_workers)
-    trainer = pl.Trainer(accelerator=args.accelerator, devices=args.devices, strategy='dp')              #  管理训练过程  strategy:  'ddp'，在多个 GPU 上并行训练模型的方法，可以加速训练过程
+    trainer = pl.Trainer(accelerator=args.accelerator, devices=args.devices, strategy='ddp')              #  管理训练过程  strategy:  'ddp'，在多个 GPU 上并行训练模型的方法，可以加速训练过程
     trainer.test(model, dataloader)                                                                       #  开始测试

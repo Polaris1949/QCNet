@@ -119,11 +119,11 @@ class Natsumi(nn.Module):
         # 1. Gather input
         # Shape of x: (num_historical_steps, num_agents, hidden_dim)
         self.prepare_data(x, edge_index)
-        # 3. Train
+        # 2. Train
         self.do_train()
-        # 4. Embed
+        # 3. Embed
         self.embed()
-        # 5. Convert to edge_index
+        # 4. Convert to edge_index
         return self.output_edge_index()
 
     def prepare_data(self, x: torch.Tensor, edge_index: torch.Tensor) -> None:
@@ -151,6 +151,7 @@ class Natsumi(nn.Module):
         A_sp = torch.sparse.FloatTensor(i, v, torch.Size([self.num_nodes, self.num_nodes])).to(GRLC_DEVICE)
         A = A_sp.to_dense()
         I = torch.eye(A.shape[1]).to(GRLC_DEVICE)
+        # print(f'!!! prepare_data: {self.num_nodes=}, {A.shape=}, {I.shape=}, {self.real_num_agents=}, {self.num_edges=}')
         self.A_I = A + I
         self.A_I_nomal = normalize_graph(self.A_I)
         self.I_input = torch.eye(self.A_I_nomal.shape[1]).to(GRLC_DEVICE)
@@ -250,7 +251,7 @@ class Natsumi(nn.Module):
         # END NOTE
 
         # Convert adjacency matrix attention_N to edge index
-        edge_index = attention_N.nonzero().t().long()
+        edge_index = attention_N.nonzero().t().long()  # TODO: How many edges? Full?
         # FIXME: Algorithm triggers CUDA IndexError, filter range directly as a workaround
         # edge_index = filter_edges_unified(edge_index, self.num_steps, self.num_agents, self.real_num_agents)
         # Theoretic-incorrect code

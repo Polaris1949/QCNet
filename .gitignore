@@ -1,5 +1,6 @@
 # Custom
 data_av2/
+submission.parquet
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

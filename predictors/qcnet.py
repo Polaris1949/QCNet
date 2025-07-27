@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import os.path
 from itertools import chain
 from itertools import compress
 from pathlib import Path
@@ -230,7 +231,8 @@ class QCNet(pl.LightningModule):
             data['agent']['av_index'] += data['agent']['ptr'][:-1]
         reg_mask = data['agent']['predict_mask'][:, self.num_historical_steps:]
         cls_mask = data['agent']['predict_mask'][:, -1]
-        pred = self(data)
+        pred = self(data)  # 调用当前实例的forward方法，传入数据data，得到预测结果pred
+        # pred是一个字典，包含了模型的预测结果，包括位置、方向、尺度等信息
         if self.output_head:
             traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
                                       pred['loc_propose_head'],
@@ -320,6 +322,7 @@ class QCNet(pl.LightningModule):
         else:
             traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
                                      pred['scale_refine_pos'][..., :self.output_dim]], dim=-1)
+        #print(f'{traj_refine.shape=}, {pred["pi"].shape=}')  # 打印预测轨迹和概率的形状，用于调试
         pi = pred['pi']
         if self.dataset == 'argoverse_v2':
             eval_mask = data['agent']['category'] == 3
@@ -348,6 +351,10 @@ class QCNet(pl.LightningModule):
                 self.test_predictions[data['scenario_id']] = (pi_eval[0], {eval_id[0]: traj_eval[0]})      # 将预测的概率和轨迹存储在self.test_predictions字典中，单个场景的情况
         else:
             raise ValueError('{} is not a valid dataset'.format(self.dataset))
+        # TODO
+        #print(f'{pi.shape=}, {pi_eval.shape=}')
+        self.save_test_parquet(save_dir=self.submission_dir)  # 保存测试预测结果到parquet文件中，使用self.submission_dir作为保存目录
+        #exit(0)
 
     def on_test_end(self):
         if self.dataset == 'argoverse_v2':
@@ -356,7 +363,41 @@ class QCNet(pl.LightningModule):
         else:
             raise ValueError('{} is not a valid dataset'.format(self.dataset))
 
-# 配置模型的优化器
+    def save_test_parquet(self, save_dir: str):
+        """
+        Save the test predictions to a parquet file, same as the input dataset format.
+        :param save_dir: The directory to save the parquet files.
+        """
+        from av2.datasets.motion_forecasting.scenario_serialization import (
+            ArgoverseScenario, Track, ObjectState, serialize_argoverse_scenario_parquet, load_argoverse_scenario_parquet
+        )
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+        for scenario_id, (pi, traj) in self.test_predictions.items():
+            scenario = load_argoverse_scenario_parquet(Path(f'./data_av2/test/raw/{scenario_id}/scenario_{scenario_id}.parquet'))  # 从保存的parquet文件中加载场景数据
+            # scenario_id is the key, pi is the predicted probabilities, traj is the predicted trajectories
+            # traj is a dict with agent id as key and trajectory as value
+            for agent_id, trajectory in traj.items():  # 遍历每个智能体的预测轨迹
+                # Find target track in scenario
+                target_track = next((track for track in scenario.tracks if track.track_id == agent_id), None)
+                if target_track is None:  # 如果没有找到目标轨迹，则跳过
+                    continue
+                #print(f'{target_track.object_states=}')
+                # trajectory.shape=(6, 60, 2) [num_modes, num_future_steps, output_dim]
+                trajectory = trajectory[0]
+                object_states = target_track.object_states  # 创建一个空的对象状态列表，用于存储智能体的状态
+                if len(object_states) < self.num_historical_steps + self.num_future_steps:  # 如果对象状态的长度小于历史步数和未来步数之和，则跳过
+                    continue
+                #print(f'{target_track=}, {len(object_states)=}, {self.num_historical_steps=}, {self.num_future_steps=}')  # 打印对象状态的长度和历史步数、未来步数
+                for t in range(self.num_future_steps):  # 遍历每个时间步
+                    pos_x = trajectory[t, 0]  # 获取当前时间步的x坐标
+                    pos_y = trajectory[t, 1]  # 获取当前时间步的y坐标
+                    object_state = object_states[t + self.num_historical_steps]  # 获取当前时间步对应的对象状态
+                    object_state.observed = True
+                    object_state.position = (pos_x, pos_y)  # 更新对象状态的位置信息s
+            serialize_argoverse_scenario_parquet(Path(f'./test_output/{scenario_id}.parquet'), scenario)
+
+    # 配置模型的优化器
     def configure_optimizers(self):
         decay = set()       # 分别用于存储应该应用权重衰减和不应用权重衰减
         no_decay = set()
@@ -385,12 +426,65 @@ class QCNet(pl.LightningModule):
         assert len(inter_params) == 0                         # 确保没有参数同时存在于decay和no_decay集合中
         assert len(param_dict.keys() - union_params) == 0     # 确保所有参数都被正确分类到decay或no_decay集合中
 
+        # QCNet的特征表征层设置为需要梯度,GRLC的参数设置为需要梯度
+        parameters_to_update = [
+            "encoder.agent_encoder.type_a_emb.weight",
+            "encoder.agent_encoder.x_a_emb.freqs.weight",
+            "encoder.agent_encoder.x_a_emb.mlps.0.0.weight",
+            "encoder.agent_encoder.x_a_emb.mlps.0.1.weight",
+            "encoder.agent_encoder.x_a_emb.mlps.0.3.weight",
+            "encoder.agent_encoder.x_a_emb.mlps.1.0.weight",
+            "encoder.agent_encoder.x_a_emb.mlps.1.1.weight",
+            "encoder.agent_encoder.x_a_emb.mlps.1.3.weight",
+            "encoder.agent_encoder.x_a_emb.mlps.2.0.weight",
+            "encoder.agent_encoder.x_a_emb.mlps.2.1.weight",
+            "encoder.agent_encoder.x_a_emb.mlps.2.3.weight",
+            "encoder.agent_encoder.x_a_emb.mlps.3.0.weight",
+            "encoder.agent_encoder.x_a_emb.mlps.3.1.weight",
+            "encoder.agent_encoder.x_a_emb.mlps.3.3.weight",
+            "encoder.agent_encoder.x_a_emb.to_out.0.weight",
+            "encoder.agent_encoder.x_a_emb.to_out.2.weight",
+            "encoder.agent_encoder.natsumi.model.gcn_0.fc.weight",
+            "encoder.agent_encoder.natsumi.model.gcn_1.fc.weight",
+
+            "encoder.agent_encoder.x_a_emb.mlps.0.0.bias",
+            "encoder.agent_encoder.x_a_emb.mlps.0.1.bias",
+            "encoder.agent_encoder.x_a_emb.mlps.0.3.bias",
+            "encoder.agent_encoder.x_a_emb.mlps.1.0.bias",
+            "encoder.agent_encoder.x_a_emb.mlps.1.1.bias",
+            "encoder.agent_encoder.x_a_emb.mlps.1.3.bias",
+            "encoder.agent_encoder.x_a_emb.mlps.2.0.bias",
+            "encoder.agent_encoder.x_a_emb.mlps.2.1.bias",
+            "encoder.agent_encoder.x_a_emb.mlps.2.3.bias",
+            "encoder.agent_encoder.x_a_emb.mlps.3.0.bias",
+            "encoder.agent_encoder.x_a_emb.mlps.3.1.bias",
+            "encoder.agent_encoder.x_a_emb.mlps.3.3.bias",
+            "encoder.agent_encoder.x_a_emb.to_out.0.bias",
+            "encoder.agent_encoder.x_a_emb.to_out.2.bias",
+            "encoder.agent_encoder.natsumi.model.gcn_0.fc.bias",
+            "encoder.agent_encoder.natsumi.model.gcn_1.fc.bias",
+            "encoder.agent_encoder.natsumi.model.gcn_1.bias",
+            "encoder.agent_encoder.natsumi.model.gcn_0.bias"
+        ]
+
+        for param_name in sorted(list(param_dict.keys())):  # 遍历所有参数
+            #print(f"{param_name}: 设置前：requires_grad={param_dict[param_name].requires_grad}")
+                if param_name in parameters_to_update:
+                    param_dict[param_name].requires_grad = True
+                else:
+                    param_dict[param_name].requires_grad = False  # TODO: 将其他参数的requires_grad属性设置为False，表示这些参数在训练过程中不需要计算梯度
+
+
         optim_groups = [     # 将参数传递给优化器
             {"params": [param_dict[param_name] for param_name in sorted(list(decay))],  # params键对应的值是一个列表，包含了所有应该应用权重衰减的参数
              "weight_decay": self.weight_decay},
             {"params": [param_dict[param_name] for param_name in sorted(list(no_decay))],
              "weight_decay": 0.0},
         ]
+
+        for param_name in sorted(list(param_dict.keys())):  # 遍历所有参数
+            print(f"{param_name}: 设置后：requires_grad={param_dict[param_name].requires_grad}")  # 打印每个参数的名称和其requires_grad属性的值
+
 
         optimizer = torch.optim.AdamW(optim_groups, lr=self.lr, weight_decay=self.weight_decay)    # 创建了一个AdamW优化器实例，正确地应用权重衰减。这里，lr是学习率，weight_decay是全局设置的权重衰减值
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer, T_max=self.T_max, eta_min=0.0)  # 创建了一个学习率调度器，它将学习率按照余弦衰减函数进行调整。T_max是一个周期内的学习率调度次数，eta_min是学习率衰减到的最小值

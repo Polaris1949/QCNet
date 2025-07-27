@@ -1,18 +1,17 @@
 import argparse
 import os
 
-IS_IN_EDITOR = True
 DATASET_ROOT = './data_av2'
-CHECKPOINT = './checkpoints/qcnet.ckpt'
+CHECKPOINT = './lightning_logs/version_73/checkpoints/epoch=49-step=20000.ckpt'
+is_load_ckpt = True  # 是否加载预训练模型
+ckpt_dir = r'/home/lk/QCNet/lightning_logs/version_73/checkpoints/epoch=49-step=20000.ckpt'
+
 
 if __name__ == '__main__':
-    if IS_IN_EDITOR:
-        mode = 'train'
-    else:
-        parser = argparse.ArgumentParser()
-        parser.add_argument('mode', type=str, choices=['train', 'val', 'test'], help='Mode to run the script in')
-        args = parser.parse_args()
-        mode = args.mode
+    parser = argparse.ArgumentParser()
+    parser.add_argument('mode', nargs='?', type=str, choices=['train', 'val', 'test'], default='train', help='Mode to run the script in')
+    args = parser.parse_args()
+    mode = args.mode
 
     print(f"Running in {mode} mode")
 
@@ -34,9 +33,11 @@ if __name__ == '__main__':
             '--a2a_radius 50 '
             '--num_t2m_steps 30 '
             '--pl2m_radius 150 '
-            '--a2m_radius 150 '
+            '--a2m_radius 50 '  # the origin data is 150m
             '--hidden_dim 128 ' # TODO
-            '--max_epochs 1000000 '
+            '--max_epochs 150 '
+            '--load_ckpt' + f' {str(is_load_ckpt)} '
+            '--ckpt_dir ' + ckpt_dir + ' '
         )
     elif mode == 'val':
         os.system(
@@ -49,6 +50,7 @@ if __name__ == '__main__':
         os.system(
             'python test.py '
             '--model QCNet '
+            '--batch_size 1 '
             f'--root {DATASET_ROOT} '
             f'--ckpt_path {CHECKPOINT}'
         )

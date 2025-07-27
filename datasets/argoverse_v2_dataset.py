@@ -31,6 +31,23 @@ from tqdm import tqdm
 from utils import safe_list_index
 from utils import side_to_directed_lineseg
 
+# Update number of samples here
+FULL_SAMPLES = {
+    'train': 199908,
+    'val': 24988,
+    'test': 24984,
+}
+CUSTOM1_SAMPLES = {
+    'train': 400,
+    'val': 283,
+    'test': 216,
+}
+CUSTOM2_SAMPLES = {
+    'train': 20000,
+    'val': 5000,
+    'test': 5000,
+}
+NUM_SAMPLES = CUSTOM1_SAMPLES
 
 try:                    # 尝试导入模块和函数
     from av2.geometry.interpolate import compute_midpoint_line
@@ -132,11 +149,7 @@ class ArgoverseV2Dataset(Dataset):
         self.predict_unseen_agents = predict_unseen_agents
         self.vector_repr = vector_repr
         self._url = f'https://s3.amazonaws.com/argoverse/datasets/av2/tars/motion-forecasting/{split}.tar'
-        self._num_samples = {
-            'train': 400,#199908,
-            'val': 283,#24988,
-            'test': 216,#24984,
-        }[split]
+        self._num_samples = NUM_SAMPLES[split]
         self._agent_types = ['vehicle', 'pedestrian', 'motorcyclist', 'cyclist', 'bus', 'static', 'background',
                              'construction', 'riderless_bicycle', 'unknown']                # 定义智能体类型
         self._agent_categories = ['TRACK_FRAGMENT', 'UNSCORED_TRACK', 'SCORED_TRACK', 'FOCAL_TRACK']   # 定义智能体类别
@@ -187,7 +200,7 @@ class ArgoverseV2Dataset(Dataset):
         for raw_file_name in tqdm(self.raw_file_names):               # tqdm是一个进度条库，用于在控制台显示进度
             df = pd.read_parquet(os.path.join(self.raw_dir, raw_file_name, f'scenario_{raw_file_name}.parquet'))     # 用pandas库读取一个Parquet文件
             map_dir = Path(self.raw_dir) / raw_file_name              # 使用pathlib库创建一个路径对象，指向包含地图数据的目录
-            map_path = map_dir / sorted(map_dir.glob('log_map_archive_*.json'))[0]   # 在map_dir目录中查找所有以log_map_archive_开头的 JSON 文件，并选择第一个文件作为地图数据文件
+            map_path = sorted(map_dir.glob('log_map_archive_*.json'))[0]
             map_data = read_json_file(map_path)              # 读取地图数据json文件，并将内容存储在map_data变量中
             centerlines = {lane_segment['id']: Polyline.from_json_data(lane_segment['centerline'])
                            for lane_segment in map_data['lane_segments'].values()}              # 从地图数据中提取车道线信息，并创建一个车道线id到Polyline对象的映射

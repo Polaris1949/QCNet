@@ -14,6 +14,7 @@
 from argparse import ArgumentParser
 
 import pytorch_lightning as pl
+import torch
 from pytorch_lightning.callbacks import LearningRateMonitor
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.strategies import DDPStrategy
@@ -49,10 +50,19 @@ if __name__ == '__main__':
     parser.add_argument('--accelerator', type=str, default='auto')
     parser.add_argument('--devices', type=int, required=True)
     parser.add_argument('--max_epochs', type=int, default=64)           # 最大训练周期
+    parser.add_argument("--load_ckpt", type=bool, default=False)  # 是否加载预训练模型
+    parser.add_argument("--ckpt_dir", type=str,default=None) # 预训练模型路径
     QCNet.add_model_specific_args(parser)          # 允许模型添加特定的参数
     args = parser.parse_args()
 
     model = QCNet(**vars(args))
+
+    # TODO：加载预训练模型
+    if args.load_ckpt:
+        if args.ckpt_dir is not None:
+            checkpoint = torch.load(args.ckpt_dir, map_location='cuda:0')  # 加载指定路径的预训练模型
+            model.load_state_dict(checkpoint['state_dict'], strict=False)  # 加载模型参数，strict=False允许加载部分参数
+            print("加载预训练模型：",args.ckpt_dir)
     datamodule = {
         'argoverse_v2': ArgoverseV2DataModule,
     }[args.dataset](**vars(args))
@@ -60,6 +70,6 @@ if __name__ == '__main__':
     lr_monitor = LearningRateMonitor(logging_interval='epoch')                  # 学习率监控器，用于在每个epoch后记录学习率
 #    strategy = DDPStrategy(find_unused_parameters=False, gradient_as_bucket_view=True)
     trainer = pl.Trainer(accelerator=args.accelerator, devices=args.devices,    # trainer包含了训练、验证和测试过程的所有细节
-                         strategy=DDPStrategy(process_group_backend='gloo',find_unused_parameters=False, gradient_as_bucket_view=True),  # DDPStrategy用于在多个 GPU 上并行训练模型；find_unused_parameters=False 参数用于优化性能，当模型非常大且包含未使用的参数时，可以提高效率；gradient_as_bucket_view=True 是一个性能优化选项，它允许在多 GPU 训练时减少内存使用。
+                         strategy=DDPStrategy(process_group_backend='gloo',find_unused_parameters=True, gradient_as_bucket_view=True),  # DDPStrategy用于在多个 GPU 上并行训练模型；find_unused_parameters=False 参数用于优化性能，当模型非常大且包含未使用的参数时，可以提高效率；gradient_as_bucket_view=True 是一个性能优化选项，它允许在多 GPU 训练时减少内存使用。
                          callbacks=[model_checkpoint, lr_monitor], max_epochs=args.max_epochs)  #callbacks: 指定在训练过程中要使用的回调函数列表
     trainer.fit(model, datamodule)  # 数据预处理，得到整体的指标，训练时使用
