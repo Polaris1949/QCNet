@@ -50,19 +50,15 @@ if __name__ == '__main__':
     parser.add_argument('--accelerator', type=str, default='auto')
     parser.add_argument('--devices', type=int, required=True)
     parser.add_argument('--max_epochs', type=int, default=64)           # 最大训练周期
-    parser.add_argument("--load_ckpt", type=bool, default=False)  # 是否加载预训练模型
-    parser.add_argument("--ckpt_dir", type=str,default=None) # 预训练模型路径
+    parser.add_argument('--ckpt_path', type=str, nargs='?', default=None)    # 模型检查点的路径
     QCNet.add_model_specific_args(parser)          # 允许模型添加特定的参数
     args = parser.parse_args()
 
-    model = QCNet(**vars(args))
+    if args.ckpt_path is None:
+        model = QCNet(**vars(args))
+    else:
+        model = QCNet.load_from_checkpoint(checkpoint_path=args.ckpt_path)
 
-    # TODO：加载预训练模型
-    if args.load_ckpt:
-        if args.ckpt_dir is not None:
-            checkpoint = torch.load(args.ckpt_dir, map_location='cuda:0')  # 加载指定路径的预训练模型
-            model.load_state_dict(checkpoint['state_dict'], strict=False)  # 加载模型参数，strict=False允许加载部分参数
-            print("加载预训练模型：",args.ckpt_dir)
     datamodule = {
         'argoverse_v2': ArgoverseV2DataModule,
     }[args.dataset](**vars(args))

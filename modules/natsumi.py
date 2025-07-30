@@ -118,12 +118,14 @@ class Natsumi(nn.Module):
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
         # 1. Gather input
         # Shape of x: (num_historical_steps, num_agents, hidden_dim)
+        print(f'the input feature:{x}')
         self.prepare_data(x, edge_index)
         # 2. Train
         self.do_train()
         # 3. Embed
         self.embed()
         # 4. Convert to edge_index
+        print('Next Epoch')
         return self.output_edge_index()
 
     def prepare_data(self, x: torch.Tensor, edge_index: torch.Tensor) -> None:
@@ -155,10 +157,12 @@ class Natsumi(nn.Module):
         self.A_I = A + I
         self.A_I_nomal = normalize_graph(self.A_I)
         self.I_input = torch.eye(self.A_I_nomal.shape[1]).to(GRLC_DEVICE)
+        self.mask_I = (torch.eye(self.num_nodes).to(GRLC_DEVICE) == 1)
 
         self.gen_negative_samples()
 
     def gen_negative_samples(self) -> None:
+        # Generate negative samples randomly
         x = self.x
         feature_n = []
         nb_nodes = self.num_nodes
@@ -166,45 +170,75 @@ class Natsumi(nn.Module):
             idx_0 = np.random.permutation(nb_nodes)
             feature_temp = x[idx_0].to(GRLC_DEVICE)
             feature_n.append(feature_temp)
+
         self.neg_matrices = feature_n
 
     def do_train(self) -> None:
         # print('do_train')
+        torch.autograd.set_detect_anomaly(True)
         model = self.model
         model.train()
-        # FIXED: RuntimeError: element 0 of tensors does not require grad and does not have a grad_fn
-        # Move loss calculation and optimiser step to QCNet.training_step()
         # torch.set_grad_enabled(True)
         # self.optimiser.zero_grad()
         nb_nodes = self.num_nodes
-
+        num_neg = self.num_neg
+        margin_loss = self.margin_loss
         feature_X = self.x
+        #print(f'the feature_X is ............:{feature_X}')
+        mask_I = self.mask_I
+        lbl_z = torch.tensor([0.]).to(feature_X.device)  # Zero label for margin loss
         feature_a = feature_X
         feature_p = feature_X
-        feature_n = self.neg_matrices
-        lbl_z = torch.tensor([0.]).to(GRLC_DEVICE)
+        feature_n = []
 
+        # TODO: modify the negative sample generation
+        for i in range(num_neg):
+            idx_0 = np.random.permutation(nb_nodes)
+            feature_temp = feature_X[idx_0]
+            feature_n.append(feature_temp)
+        print(f'feature_n:{feature_n=}')
         h_a, h_p, h_n_lsit, h_a_0, h_p_0, h_n_0_list = model(feature_a, feature_p, feature_n, self.A_I_nomal, I=self.I_input)
+        #print(f'h_a:{h_a},h_p:{h_p},h_n_list:{h_n_lsit}')
+
+        # check_nan(h_a, 'h_a nan')
+        # check_nan(h_p, 'h_p nan')
         s_p = F.pairwise_distance(h_a, h_p)
+        # check_nan(s_p, 's_p nan')  #FIXME: s_p is inf
         cos_0_list = []
         for h_n_0 in h_n_0_list:
             cos_0 = F.pairwise_distance(h_a_0, h_n_0)
             cos_0_list.append(cos_0)
         cos_0_stack = torch.stack(cos_0_list).detach()
+        # print(f'{cos_0_stack=}')
+        # check_nan(cos_0_stack, 'cos_0_stack nan')
         cos_0_min = cos_0_stack.min(dim=0)[0]
         cos_0_max = cos_0_stack.max(dim=0)[0]
-        gap = cos_0_max - cos_0_min
+        # print(f'{cos_0_min=}, {cos_0_max=}')
+        print(f'cos_0_min:{cos_0_min}, cos_0_max:{cos_0_max}')
+        gap = cos_0_max - cos_0_min  # FIXME: This contains zero.
+        # TODO:print the situation when gap is zero
+
+        print(f'gap:{gap}')
+        print(f'gap_shape:{gap.shape}')
+        # print(f'{gap=}')
         weight_list = []
         for i in range(cos_0_stack.size()[0]):
-            weight_list.append((cos_0_stack[i] - cos_0_min) / gap)
+            weight = (cos_0_stack[i] - cos_0_min) / gap
+            # print(f'weight{weight}')
+            if torch.isnan(weight).any():
+                # FIXME: Every weight contains NaN.
+                # print('!!!', i, cos_0_stack[i], cos_0_min, gap)
+                weight = torch.nan_to_num(weight, nan=0.0)
+                # print('@@@', torch.isnan(weight).any())
+            weight_list.append(weight)
+        weight_list_stk = torch.stack(weight_list)
+        # print(f'{weight_list_stk=}')
+        #scheck_nan(weight_list_stk, 'weight_list_stk nan')
         s_n_list = []
         s_n_cosin_list = []
-        mask_I = (torch.eye(nb_nodes).to(GRLC_DEVICE) == 1)
         for h_n in h_n_lsit:
-            # NOTE: Following code runs under certain condition: args.dataset_name in ['Cora', 'CiteSeer']
             s_n_cosin_list.append(cosine_dist(h_a, h_n)[mask_I].detach())
-            # END NOTE
-            s_n = F.pairwise_distance(h_a, h_n)
+            s_n = F.pairwise_distance(h_a, h_n)  # FIXME: s_n is inf
             s_n_list.append(s_n)
         self.s_n_cosin_list = s_n_cosin_list
         margin_label = -1 * torch.ones_like(s_p)
@@ -212,12 +246,19 @@ class Natsumi(nn.Module):
         mask_margin_N = 0
         i = 0
         for s_n in s_n_list:
-            loss_mar += (self.margin_loss(s_p, s_n, margin_label) * weight_list[i]).mean()
+            # check_nan(s_n, 's_n nan')
+            loss_mar += (margin_loss(s_p, s_n, margin_label) * weight_list[i]).mean()
+            #print(f'margin_loss(s_p, s_n, margin_label):{margin_loss(s_p, s_n, margin_label)}')
+            #check_nan(loss_mar, 'loss_mar nan')
             mask_margin_N += torch.max((s_n - s_p.detach() - my_margin_2), lbl_z).sum()
+            #print(f'(s_n - s_p.detach() - my_margin_2):{( s_p.detach())}')
+            #check_nan(mask_margin_N, 'mask_margin_N nan')
             i += 1
-        mask_margin_N = mask_margin_N / self.num_neg
-        string_1 = " loss_1: {:.3f}||loss_2: {:.3f}||".format(loss_mar.item(), mask_margin_N.item())
-        self.loss = loss_mar * w_loss1 + mask_margin_N * w_loss2 / nb_nodes
+        mask_margin_N = mask_margin_N / num_neg
+        loss = loss_mar * w_loss1 + mask_margin_N * w_loss2 / nb_nodes
+        # print(f'{loss=}')
+        print('an epoch is over.To the next epoch')
+        self.loss = loss
         # NOTE: Following code runs under certain condition: args.dataset_name in ['Cora']
         # loss = loss_mar * w_loss1 + mask_margin_N * w_loss2
         # END NOTE

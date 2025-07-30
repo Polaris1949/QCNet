@@ -28,6 +28,7 @@ from utils import angle_between_2d_vectors
 from utils import weight_init
 from utils import wrap_angle
 
+from utils import filter_specific_edges
 from modules.natsumi import Natsumi, slide_sequence
 
 # GRLC parameters
@@ -121,7 +122,7 @@ class QCNetAgentEncoder(nn.Module):
         orient_pl = data['map_polygon']['orientation'].contiguous()               # 提取地图多边形的朝向信息
         if self.dataset == 'argoverse_v2':    # 处理输入数据，提取和转换智能体的速度和类型信息，并将类型信息转换为嵌入向量
             vel = data['agent']['velocity'][:, :self.num_historical_steps, :self.input_dim].contiguous()  # 从数据中提取智能体的速度信息
-            length = width = height = None  # 尺寸设置
+            #print('Type:', data['agent']['type'])
             categorical_embs = [
                 self.type_a_emb(data['agent']['type'].long()).repeat_interleave(repeats=self.num_historical_steps, # 用self.type_a_emb嵌入层将代理的类型转换为嵌入向量。
                                                                                 dim=0),  #  然后使用 repeat_interleave 方法在第0维上重复每个嵌入向量self.num_historical_steps次，以匹配历史步骤的数量
@@ -139,6 +140,7 @@ class QCNetAgentEncoder(nn.Module):
             raise ValueError('{} is not a valid dataset'.format(self.dataset))
         # view()方法用于重新塑形张量的形状而不改变其数据
         x_a = self.x_a_emb(continuous_inputs=x_a.view(-1, x_a.size(-1)), categorical_embs=categorical_embs) # 将计算得到的特征向量x_a通过Fourier嵌入层进行嵌入
+
         x_a = x_a.view(-1, self.num_historical_steps, self.hidden_dim)       # 嵌入后的特征向量重新塑形，以匹配历史步骤的数量和隐藏层的维度
 
         pos_t = pos_a.reshape(-1, self.input_dim)      # 将智能体的位置张量pos_a重塑为每个智能体一个位置向量的格式。
@@ -159,10 +161,10 @@ class QCNetAgentEncoder(nn.Module):
              edge_index_t[0] - edge_index_t[1]], dim=-1)
         r_t = self.r_t_emb(continuous_inputs=r_t, categorical_embs=None) # 将构建的关系特征向量r_t传递给关系时间嵌入层self.r_t_emb进行嵌入
 
-        pos_s = pos_a.transpose(0, 1).reshape(-1, self.input_dim)   # [T*A,D] 首先将智能体的位置张量pos_a进行转置，使得历史步骤成为第一个维度，然后重塑为一维索引，每个代理一个位置向量
-        head_s = head_a.transpose(0, 1).reshape(-1)           # 将智能体的朝向角度张量head_a进行转置并重塑，使得历史步骤成为第一个维度
-        head_vector_s = head_vector_a.transpose(0, 1).reshape(-1, 2)   # 将智能体的朝向向量张量head_vector_a进行转置并重塑，使得历史步骤成为第一个维度，每个代理一个二维朝向向量
-        mask_s = mask.transpose(0, 1).reshape(-1)        # 将有效掩码进行转置并重塑，使得历史步骤成为第一个维度
+        pos_s = pos_a.transpose(0, 1).reshape(-1, self.input_dim)   # [T*A,2] 首先将智能体的位置张量pos_a进行转置，使得历史步骤成为第一个维度，然后重塑为一维索引，每个代理一个位置向量
+        head_s = head_a.transpose(0, 1).reshape(-1)           # [T*A] 将智能体的朝向角度张量head_a进行转置并重塑，使得历史步骤成为第一个维度
+        head_vector_s = head_vector_a.transpose(0, 1).reshape(-1, 2)   # [T*A,2] 将智能体的朝向向量张量head_vector_a进行转置并重塑，使得历史步骤成为第一个维度，每个代理一个二维朝向向量
+        mask_s = mask.transpose(0, 1).reshape(-1)        # [T*A] 将有效掩码进行转置并重塑，使得历史步骤成为第一个维度
         pos_pl = pos_pl.repeat(self.num_historical_steps, 1)     # 将地图多边形的位置张量pos_pl在第一个维度上重复self.num_historical_steps次，以匹配代理的历史步骤数量
         orient_pl = orient_pl.repeat(self.num_historical_steps)
         if isinstance(data, Batch):
@@ -196,12 +198,28 @@ class QCNetAgentEncoder(nn.Module):
         edge_index_a2a = radius_graph(x=pos_s[:, :2], r=self.a2a_radius, batch=batch_s, loop=False, # 使用radius函数根据位置和半径self.pl2a_radius来构建智能体和智能体之间的边
                                       max_num_neighbors=300)                                        # loop=False 表示不添加自循环
         edge_index_a2a = subgraph(subset=mask_s, edge_index=edge_index_a2a)[0]         # 使用subgraph函数和掩码mask_s过滤边，只保留有效的边
-        # print(f'{edge_index_a2a.shape=}')
+
+        # TODO: Visualize selected edges
+        # FIXME: Assume batch_size=1
+        num_agents = data['agent']['num_nodes']  # 获取当前批次中智能体的数量
+        av_index = data['agent']['av_index'][0]  # 获取当前批次中智能体的索引
+        #max_index = num_agents * self.num_historical_steps  # 获取当前批次中智能体的最大索引
+        #print(f'{pos_a.shape=}, {pos_s.shape=}')
+        #print(f'{num_agents=}, {av_index=}, {max_index=}')
+        #print(f'{edge_index_a2a=}')
+        # 筛选出与中心智能体相关的智能体
+        # av_edges: 与中心智能体相关的边索引
+        # av_other_nodes: 与中心智能体相关的其他节点索引
+        # av_otas: 与中心智能体相关的其他节点索引的二维形式, shape: [2, K]
+        # av_otas[0]: 时间步索引, av_otas[1]: 智能体索引
+        av_edges, av_other_nodes, av_otas = filter_specific_edges(edge_index_a2a, A=num_agents, T=self.num_historical_steps, x=av_index)  # 使用filter_specific_edges函数过滤边索引，只保留与自动驾驶车辆相关的边
+        #print(f'{edge_index_a2a.shape=}, {av_edges.shape=}, {av_other_nodes.shape=}, {av_otas.shape=}')  # 打印原始边索引和过滤后的边索引的形状
+        #print(f'{av_edges=}')
+        #print(f'{av_other_nodes=}')
+        #print(f'{av_otas=}')
 
         if USE_NATSUMI:  # 如果使用Natsumi模型
             # TODO: GRLC
-            # FIXME: Index out of range during validation stage
-            # print(f'{x_a.shape=}')
             num_nodes = data['agent']['num_nodes']
             grlc_x_a = x_a.transpose(0, 1)  # 将智能体的特征张量x_a转置，使得历史步骤成为第一个维度
             # 初始化一个空的边索引张量，用于存储处理后的边索引

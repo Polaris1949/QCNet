@@ -47,6 +47,11 @@ CUSTOM2_SAMPLES = {
     'val': 5000,
     'test': 5000,
 }
+CUSTOM3_SAMPLES = {
+    'train': 2,
+    'val': 1,
+    'test': 1,
+}
 NUM_SAMPLES = CUSTOM1_SAMPLES
 
 try:                    # 尝试导入模块和函数
@@ -122,6 +127,7 @@ class ArgoverseV2Dataset(Dataset):
                                         os.path.isdir(os.path.join(self._raw_dir, name))]
             else:
                 self._raw_file_names = []
+        self._raw_file_names = self._raw_file_names[:NUM_SAMPLES[split]]
 
         if processed_dir is None:           # 设置处理后的数据目录
             processed_dir = os.path.join(root, split, 'processed')
@@ -141,6 +147,7 @@ class ArgoverseV2Dataset(Dataset):
                                               name.endswith(('pkl', 'pickle'))]
             else:
                 self._processed_file_names = []
+        self._processed_file_names = self._processed_file_names[:NUM_SAMPLES[split]]
 
         self.dim = dim
         self.num_historical_steps = num_historical_steps

@@ -151,6 +151,7 @@ if __name__ == '__main__':
     val_dataloader = datamodule.val_dataloader()
     test_dataloader = datamodule.test_dataloader()
     max_num_agents = 0
+    min_num_agents = 10000
     max_distance = 0.0
     max_dists = []
     dists = []
@@ -158,6 +159,7 @@ if __name__ == '__main__':
     for data in chain(train_dataloader, val_dataloader, test_dataloader):  # 遍历各个场景下车辆的数据集
         for scene in AstreaScene.from_batch(data):
             # print(scene.agent)
+            min_num_agents = min(min_num_agents, scene.agent.num_nodes)
             max_num_agents = max(max_num_agents, scene.agent.num_nodes)
             agent_ids, step_ids, local_dists = scene.agent.radius(200)
             dists.append(local_dists)
@@ -167,6 +169,7 @@ if __name__ == '__main__':
             print(f'{scene.scenario_id=}, {local_max_dist=:.2f}')
             max_distance = max(max_distance, local_max_dist)
 
+    print(f'{min_num_agents=}')
     print(f'{max_num_agents=}')
     print(f'{max_distance=:.2f}')
     max_dists = torch.tensor(max_dists)

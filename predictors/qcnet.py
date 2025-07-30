@@ -35,6 +35,7 @@ from metrics import minFHE
 from modules import QCNetDecoder
 from modules import QCNetEncoder
 from modules.qcnet_agent_encoder import USE_NATSUMI
+from utils.mukuro import check_nan
 
 
 try:
@@ -221,6 +222,10 @@ class QCNet(pl.LightningModule):
             loss = reg_loss_propose + reg_loss_refine + cls_loss + self.encoder.agent_encoder.natsumi.loss
         else:
             loss = reg_loss_propose + reg_loss_refine + cls_loss  # 总损失loss是回归损失和分类损失的和，这个损失将被用于模型的反向传播
+
+        check_nan(loss, "Training loss contains NaN values")  # 检查损失是否包含NaN值，如果包含则抛出异常
+
+        print(f'the training loss is {loss.item()}')  # 打印当前的训练损失值
         return loss
 
 # 在模型验证阶段计算和记录损失
@@ -426,53 +431,54 @@ class QCNet(pl.LightningModule):
         assert len(inter_params) == 0                         # 确保没有参数同时存在于decay和no_decay集合中
         assert len(param_dict.keys() - union_params) == 0     # 确保所有参数都被正确分类到decay或no_decay集合中
 
-        # QCNet的特征表征层设置为需要梯度,GRLC的参数设置为需要梯度
-        parameters_to_update = [
-            "encoder.agent_encoder.type_a_emb.weight",
-            "encoder.agent_encoder.x_a_emb.freqs.weight",
-            "encoder.agent_encoder.x_a_emb.mlps.0.0.weight",
-            "encoder.agent_encoder.x_a_emb.mlps.0.1.weight",
-            "encoder.agent_encoder.x_a_emb.mlps.0.3.weight",
-            "encoder.agent_encoder.x_a_emb.mlps.1.0.weight",
-            "encoder.agent_encoder.x_a_emb.mlps.1.1.weight",
-            "encoder.agent_encoder.x_a_emb.mlps.1.3.weight",
-            "encoder.agent_encoder.x_a_emb.mlps.2.0.weight",
-            "encoder.agent_encoder.x_a_emb.mlps.2.1.weight",
-            "encoder.agent_encoder.x_a_emb.mlps.2.3.weight",
-            "encoder.agent_encoder.x_a_emb.mlps.3.0.weight",
-            "encoder.agent_encoder.x_a_emb.mlps.3.1.weight",
-            "encoder.agent_encoder.x_a_emb.mlps.3.3.weight",
-            "encoder.agent_encoder.x_a_emb.to_out.0.weight",
-            "encoder.agent_encoder.x_a_emb.to_out.2.weight",
-            "encoder.agent_encoder.natsumi.model.gcn_0.fc.weight",
-            "encoder.agent_encoder.natsumi.model.gcn_1.fc.weight",
-
-            "encoder.agent_encoder.x_a_emb.mlps.0.0.bias",
-            "encoder.agent_encoder.x_a_emb.mlps.0.1.bias",
-            "encoder.agent_encoder.x_a_emb.mlps.0.3.bias",
-            "encoder.agent_encoder.x_a_emb.mlps.1.0.bias",
-            "encoder.agent_encoder.x_a_emb.mlps.1.1.bias",
-            "encoder.agent_encoder.x_a_emb.mlps.1.3.bias",
-            "encoder.agent_encoder.x_a_emb.mlps.2.0.bias",
-            "encoder.agent_encoder.x_a_emb.mlps.2.1.bias",
-            "encoder.agent_encoder.x_a_emb.mlps.2.3.bias",
-            "encoder.agent_encoder.x_a_emb.mlps.3.0.bias",
-            "encoder.agent_encoder.x_a_emb.mlps.3.1.bias",
-            "encoder.agent_encoder.x_a_emb.mlps.3.3.bias",
-            "encoder.agent_encoder.x_a_emb.to_out.0.bias",
-            "encoder.agent_encoder.x_a_emb.to_out.2.bias",
-            "encoder.agent_encoder.natsumi.model.gcn_0.fc.bias",
-            "encoder.agent_encoder.natsumi.model.gcn_1.fc.bias",
-            "encoder.agent_encoder.natsumi.model.gcn_1.bias",
-            "encoder.agent_encoder.natsumi.model.gcn_0.bias"
-        ]
-
-        for param_name in sorted(list(param_dict.keys())):  # 遍历所有参数
-            #print(f"{param_name}: 设置前：requires_grad={param_dict[param_name].requires_grad}")
-                if param_name in parameters_to_update:
-                    param_dict[param_name].requires_grad = True
-                else:
-                    param_dict[param_name].requires_grad = False  # TODO: 将其他参数的requires_grad属性设置为False，表示这些参数在训练过程中不需要计算梯度
+        # # QCNet的特征表征层设置为需要梯度,GRLC的参数设置为需要梯度
+        # parameters_to_update = [
+        #     "encoder.agent_encoder.type_a_emb.weight",
+        #     "encoder.agent_encoder.x_a_emb.freqs.weight",
+        #     "encoder.agent_encoder.x_a_emb.mlps.0.0.weight",
+        #     "encoder.agent_encoder.x_a_emb.mlps.0.1.weight",
+        #     "encoder.agent_encoder.x_a_emb.mlps.0.3.weight",
+        #     "encoder.agent_encoder.x_a_emb.mlps.1.0.weight",
+        #     "encoder.agent_encoder.x_a_emb.mlps.1.1.weight",
+        #     "encoder.agent_encoder.x_a_emb.mlps.1.3.weight",
+        #     "encoder.agent_encoder.x_a_emb.mlps.2.0.weight",
+        #     "encoder.agent_encoder.x_a_emb.mlps.2.1.weight",
+        #     "encoder.agent_encoder.x_a_emb.mlps.2.3.weight",
+        #     "encoder.agent_encoder.x_a_emb.mlps.3.0.weight",
+        #     "encoder.agent_encoder.x_a_emb.mlps.3.1.weight",
+        #     "encoder.agent_encoder.x_a_emb.mlps.3.3.weight",
+        #     "encoder.agent_encoder.x_a_emb.to_out.0.weight",
+        #     "encoder.agent_encoder.x_a_emb.to_out.2.weight",
+        #     "encoder.agent_encoder.natsumi.model.gcn_0.fc.weight",
+        #     "encoder.agent_encoder.natsumi.model.gcn_1.fc.weight",
+        #
+        #     "encoder.agent_encoder.x_a_emb.mlps.0.0.bias",
+        #     "encoder.agent_encoder.x_a_emb.mlps.0.1.bias",
+        #     "encoder.agent_encoder.x_a_emb.mlps.0.3.bias",
+        #     "encoder.agent_encoder.x_a_emb.mlps.1.0.bias",
+        #     "encoder.agent_encoder.x_a_emb.mlps.1.1.bias",
+        #     "encoder.agent_encoder.x_a_emb.mlps.1.3.bias",
+        #     "encoder.agent_encoder.x_a_emb.mlps.2.0.bias",
+        #     "encoder.agent_encoder.x_a_emb.mlps.2.1.bias",
+        #     "encoder.agent_encoder.x_a_emb.mlps.2.3.bias",
+        #     "encoder.agent_encoder.x_a_emb.mlps.3.0.bias",
+        #     "encoder.agent_encoder.x_a_emb.mlps.3.1.bias",
+        #     "encoder.agent_encoder.x_a_emb.mlps.3.3.bias",
+        #     "encoder.agent_encoder.x_a_emb.to_out.0.bias",
+        #     "encoder.agent_encoder.x_a_emb.to_out.2.bias",
+        #     "encoder.agent_encoder.natsumi.model.gcn_0.fc.bias",
+        #     "encoder.agent_encoder.natsumi.model.gcn_1.fc.bias",
+        #     "encoder.agent_encoder.natsumi.model.gcn_1.bias",
+        #     "encoder.agent_encoder.natsumi.model.gcn_0.bias"
+        # ]
+        #
+        # # Freeze parameters that are not related to GRLC
+        # for param_name in sorted(list(param_dict.keys())):  # 遍历所有参数
+        #     #print(f"{param_name}: 设置前：requires_grad={param_dict[param_name].requires_grad}")
+        #         if param_name in parameters_to_update:
+        #             param_dict[param_name].requires_grad = True
+        #         else:
+        #             param_dict[param_name].requires_grad = False  # TODO: 将其他参数的requires_grad属性设置为False，表示这些参数在训练过程中不需要计算梯度
 
 
         optim_groups = [     # 将参数传递给优化器

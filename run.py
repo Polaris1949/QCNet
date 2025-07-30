@@ -3,8 +3,7 @@ import os
 
 DATASET_ROOT = './data_av2'
 CHECKPOINT = './lightning_logs/version_73/checkpoints/epoch=49-step=20000.ckpt'
-is_load_ckpt = True  # 是否加载预训练模型
-ckpt_dir = r'/home/lk/QCNet/lightning_logs/version_73/checkpoints/epoch=49-step=20000.ckpt'
+IS_LOAD_CKPT = False  # 是否加载预训练模型
 
 
 if __name__ == '__main__':
@@ -16,7 +15,8 @@ if __name__ == '__main__':
     print(f"Running in {mode} mode")
 
     if mode == 'train':
-        os.system(
+        ckpt_option = f'--ckpt_path {CHECKPOINT}' if IS_LOAD_CKPT else ''
+        cmd = (
             'python train_qcnet.py '
             f'--root {DATASET_ROOT} '
             '--train_batch_size 1 '
@@ -36,18 +36,17 @@ if __name__ == '__main__':
             '--a2m_radius 50 '  # the origin data is 150m
             '--hidden_dim 128 ' # TODO
             '--max_epochs 150 '
-            '--load_ckpt' + f' {str(is_load_ckpt)} '
-            '--ckpt_dir ' + ckpt_dir + ' '
+            f'{ckpt_option} '
         )
     elif mode == 'val':
-        os.system(
+        cmd = (
             'python val.py '
             '--model QCNet '
             f'--root {DATASET_ROOT} '
             f'--ckpt_path {CHECKPOINT}'
         )
     elif mode == 'test':
-        os.system(
+        cmd = (
             'python test.py '
             '--model QCNet '
             '--batch_size 1 '
@@ -57,4 +56,6 @@ if __name__ == '__main__':
     else:
         raise ValueError("Invalid mode selected. Choose from 'train', 'val', or 'test'.")
 
-    print("Script execution completed.")
+    print(f"Executing command: {cmd}")
+    ec = os.system(cmd)
+    print(f"Command exit code: {ec}")
