@@ -50,8 +50,9 @@ if __name__ == '__main__':
     parser.add_argument('--accelerator', type=str, default='auto')
     parser.add_argument('--devices', type=int, required=True)
     parser.add_argument('--max_epochs', type=int, default=64)           # 最大训练周期
-    parser.add_argument('--ckpt_path', type=str, nargs='?', default=None)    # 模型检查点的路径
-    parser.add_argument('--natsumi_ckpt', type=str, nargs='?', default=None)  # Natsumi预训练模型的路径
+    parser.add_argument('--ckpt_path', type=str, default=None)    # 模型检查点的路径
+    parser.add_argument('--natsumi', type=bool, default=False)  # 是否使用Natsumi模型
+    parser.add_argument('--natsumi_ckpt', type=str, default=None)  # Natsumi预训练模型的路径
     parser.add_argument('--natsumi_freeze', type=bool, default=True)  # 是否冻结Natsumi模型的参数
     QCNet.add_model_specific_args(parser)          # 允许模型添加特定的参数
     args = parser.parse_args()

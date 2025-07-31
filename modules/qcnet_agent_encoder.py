@@ -223,10 +223,10 @@ class QCNetAgentEncoder(nn.Module):
             yamai_graphs = miku_agent.to_graphs()  # 将MikuAgent对象转换为YamaiGraph对象
             grlc_edges = [self.natsumi.predict_edge_index(yamai_graph) for yamai_graph in yamai_graphs]  # 使用Natsumi模型预测每个YamaiGraph对象的边索引
             grlc_edges = torch.cat(grlc_edges, dim=-1)  # 将预测的边索引连接起来
-            num_qcnet_edges = edge_index_a2a.shape[1]  # 获取原始边索引的数量
-            num_grlc_edges = grlc_edges.shape[1]  # 获取Natsumi模型预测的边索引的数量
             # TODO: GRLC always selects more (~20x) edges, is this correct?
-            print(f'Edges, QCNet: {num_qcnet_edges}, GRLC: {num_grlc_edges}, G/Q: {num_grlc_edges / num_qcnet_edges:.2f}')
+            # num_qcnet_edges = edge_index_a2a.shape[1]  # 获取原始边索引的数量
+            # num_grlc_edges = grlc_edges.shape[1]  # 获取Natsumi模型预测的边索引的数量
+            # print(f'Edges, QCNet: {num_qcnet_edges}, GRLC: {num_grlc_edges}, G/Q: {num_grlc_edges / num_qcnet_edges:.2f}')
             edge_index_a2a = grlc_edges
 
         # 计算智能体之间的相对位置和方向

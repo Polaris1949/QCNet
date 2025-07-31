@@ -45,40 +45,41 @@ except ImportError:
 
 
 class QCNet(pl.LightningModule):
-
-    def __init__(self,
-                 dataset: str,
-                 input_dim: int,
-                 hidden_dim: int,
-                 output_dim: int,
-                 output_head: bool,
-                 num_historical_steps: int,
-                 num_future_steps: int,
-                 num_modes: int,
-                 num_recurrent_steps: int,
-                 num_freq_bands: int,
-                 num_map_layers: int,
-                 num_agent_layers: int,
-                 num_dec_layers: int,  # 解码器中的层数
-                 num_heads: int,
-                 head_dim: int,
-                 dropout: float,
-                 pl2pl_radius: float,
-                 time_span: Optional[int],
-                 pl2a_radius: float,
-                 a2a_radius: float,
-                 num_t2m_steps: Optional[int],
-                 pl2m_radius: float,
-                 a2m_radius: float,
-                 lr: float,  # 学习率
-                 weight_decay: float,  # 权重衰减，用于正则化
-                 T_max: int,  # 表示预测的最大时间步
-                 submission_dir: str,  # 提交文件的目录
-                 submission_file_name: str,  # 提交文件的名称
-                 natsumi_ckpt: Optional[str] = None,
-                 natsumi_freeze: bool = True,
-                 **kwargs) -> None:
-        # FIXME: RuntimeError: It looks like your LightningModule has parameters that were not used in producing the loss returned by training_step.
+    def __init__(
+        self,
+        dataset: str,
+        input_dim: int,
+        hidden_dim: int,
+        output_dim: int,
+        output_head: bool,
+        num_historical_steps: int,
+        num_future_steps: int,
+        num_modes: int,
+        num_recurrent_steps: int,
+        num_freq_bands: int,
+        num_map_layers: int,
+        num_agent_layers: int,
+        num_dec_layers: int,  # 解码器中的层数
+        num_heads: int,
+        head_dim: int,
+        dropout: float,
+        pl2pl_radius: float,
+        time_span: Optional[int],
+        pl2a_radius: float,
+        a2a_radius: float,
+        num_t2m_steps: Optional[int],
+        pl2m_radius: float,
+        a2m_radius: float,
+        lr: float,  # 学习率
+        weight_decay: float,  # 权重衰减，用于正则化
+        T_max: int,  # 表示预测的最大时间步
+        submission_dir: str,  # 提交文件的目录
+        submission_file_name: str,  # 提交文件的名称
+        natsumi: bool = False,
+        natsumi_ckpt: Optional[str] = None,
+        natsumi_freeze: bool = True,
+        **kwargs,
+    ) -> None:
         super(QCNet, self).__init__()
         self.save_hyperparameters()
         self.dataset = dataset
@@ -110,10 +111,14 @@ class QCNet(pl.LightningModule):
         self.submission_dir = submission_dir
         self.submission_file_name = submission_file_name
 
-        if natsumi_ckpt is not None:
+        if natsumi is True:
             from predictors.natsumi import Natsumi, GRLC_NUM_FEATURES, GRLC_HIDDEN_DIM
-            self.natsumi = Natsumi.load_from_checkpoint(natsumi_ckpt, num_features=GRLC_NUM_FEATURES, hidden_dim=GRLC_HIDDEN_DIM)
-            self.natsumi_freeze = natsumi_freeze
+            if natsumi_ckpt is None:
+                self.natsumi = Natsumi(num_features=GRLC_NUM_FEATURES, hidden_dim=GRLC_HIDDEN_DIM)
+                self.natsumi_freeze = False
+            else:
+                self.natsumi = Natsumi.load_from_checkpoint(natsumi_ckpt, num_features=GRLC_NUM_FEATURES, hidden_dim=GRLC_HIDDEN_DIM)
+                self.natsumi_freeze = natsumi_freeze
         else:
             self.natsumi = None
             self.natsumi_freeze = False
@@ -222,12 +227,11 @@ class QCNet(pl.LightningModule):
         self.log('train_reg_loss_propose', reg_loss_propose, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
         self.log('train_reg_loss_refine', reg_loss_refine, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
         self.log('train_cls_loss', cls_loss, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
+
         # TODO: Integrate GRLC loss
         loss = reg_loss_propose + reg_loss_refine + cls_loss  # 总损失loss是回归损失和分类损失的和，这个损失将被用于模型的反向传播
-
         check_nan(loss, "Training loss contains NaN values")  # 检查损失是否包含NaN值，如果包含则抛出异常
-
-        print(f'the training loss is {loss.item()}')  # 打印当前的训练损失值
+        # print(f'the training loss is {loss.item()}')  # 打印当前的训练损失值
         return loss
 
 # 在模型验证阶段计算和记录损失

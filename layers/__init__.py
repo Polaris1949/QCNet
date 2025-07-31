@@ -14,9 +14,3 @@
 from layers.attention_layer import AttentionLayer
 from layers.fourier_embedding import FourierEmbedding
 from layers.mlp_layer import MLPLayer
-
-# Below is merged from GRLC.
-from layers.gcn import GCN
-from layers.readout import AvgReadout
-from layers.discriminator import Discriminator, Discriminator_cluster
-from layers.cluster import Clusterator

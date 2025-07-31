@@ -4,7 +4,10 @@ import os
 DATASET_ROOT = './data_av2'
 CHECKPOINT = './lightning_logs/version_73/checkpoints/epoch=49-step=20000.ckpt'
 IS_LOAD_CKPT = False  # 是否加载预训练模型
-
+USE_NATSUMI = True  # 是否使用Natsumi模型
+IS_LOAD_NATSUMI_CKPT = True  # 是否加载Natsumi预训练模型
+NATSUMI_CKPT = './pretrained/natsumi.ckpt'  # Natsumi预训练模型的路径
+NATSUMI_FREEZE = True  # 是否冻结Natsumi模型的参数
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -16,6 +19,7 @@ if __name__ == '__main__':
 
     if mode == 'train':
         ckpt_option = f'--ckpt_path {CHECKPOINT}' if IS_LOAD_CKPT else ''
+        natsumi_ckpt_option = f'--natsumi_ckpt {NATSUMI_CKPT}' if IS_LOAD_NATSUMI_CKPT else ''
         cmd = (
             'python train_qcnet.py '
             f'--root {DATASET_ROOT} '
@@ -37,7 +41,9 @@ if __name__ == '__main__':
             '--hidden_dim 128 ' # TODO
             '--max_epochs 150 '
             f'{ckpt_option} '
-            '--natsumi_ckpt ./pretrained/natsumi.ckpt '  # Natsumi预训练模型的路径
+            f'--natsumi {USE_NATSUMI} '  # 是否使用Natsumi模型
+            f'{natsumi_ckpt_option} '  # Natsumi预训练模型的路径
+            f'--natsumi_freeze {NATSUMI_FREEZE} '  # 是否冻结Natsumi模型的参数
         )
     elif mode == 'val':
         cmd = (
