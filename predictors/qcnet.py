@@ -59,7 +59,7 @@ class QCNet(pl.LightningModule):
                  num_freq_bands: int,
                  num_map_layers: int,
                  num_agent_layers: int,
-                 num_dec_layers: int,        # 解码器中的层数
+                 num_dec_layers: int,  # 解码器中的层数
                  num_heads: int,
                  head_dim: int,
                  dropout: float,
@@ -70,11 +70,13 @@ class QCNet(pl.LightningModule):
                  num_t2m_steps: Optional[int],
                  pl2m_radius: float,
                  a2m_radius: float,
-                 lr: float,                   # 学习率
-                 weight_decay: float,         # 权重衰减，用于正则化
-                 T_max: int,                  # 表示预测的最大时间步
-                 submission_dir: str,         # 提交文件的目录
-                 submission_file_name: str,   # 提交文件的名称
+                 lr: float,  # 学习率
+                 weight_decay: float,  # 权重衰减，用于正则化
+                 T_max: int,  # 表示预测的最大时间步
+                 submission_dir: str,  # 提交文件的目录
+                 submission_file_name: str,  # 提交文件的名称
+                 natsumi_ckpt: Optional[str] = None,
+                 natsumi_freeze: bool = True,
                  **kwargs) -> None:
         # FIXME: RuntimeError: It looks like your LightningModule has parameters that were not used in producing the loss returned by training_step.
         super(QCNet, self).__init__()
@@ -108,6 +110,14 @@ class QCNet(pl.LightningModule):
         self.submission_dir = submission_dir
         self.submission_file_name = submission_file_name
 
+        if natsumi_ckpt is not None:
+            from predictors.natsumi import Natsumi, GRLC_NUM_FEATURES, GRLC_HIDDEN_DIM
+            self.natsumi = Natsumi.load_from_checkpoint(natsumi_ckpt, num_features=GRLC_NUM_FEATURES, hidden_dim=GRLC_HIDDEN_DIM)
+            self.natsumi_freeze = natsumi_freeze
+        else:
+            self.natsumi = None
+            self.natsumi_freeze = False
+
         self.encoder = QCNetEncoder(
             dataset=dataset,
             input_dim=input_dim,
@@ -123,6 +133,7 @@ class QCNet(pl.LightningModule):
             num_heads=num_heads,
             head_dim=head_dim,
             dropout=dropout,
+            natsumi=self.natsumi,
         )
         self.decoder = QCNetDecoder(
             dataset=dataset,
@@ -158,19 +169,13 @@ class QCNet(pl.LightningModule):
 
         self.test_predictions = dict()   # 初始化一个字典，用于存储测试过程中的预测结果
 
-# 前向传播过程
+    # 前向传播过程
     def forward(self, data: HeteroData):
         scene_enc = self.encoder(data)       # 调用了当前实例的encoder方法，并将data作为参数传递
         pred = self.decoder(data, scene_enc)  # 将 data 和 scene_enc 作为参数传递
         return pred
 
-    # FIXED: DDP boom, FUCKing GRLC, see grlc.py
-    # def on_after_backward(self):
-    #     for name, param in self.named_parameters():
-    #         if param.grad is None:
-    #             print(name)
-
-# 训练步骤函数，用于处理序列预测问题
+    # 训练步骤函数，用于处理序列预测问题
     def training_step(self,
                       data,
                       batch_idx):
@@ -217,11 +222,8 @@ class QCNet(pl.LightningModule):
         self.log('train_reg_loss_propose', reg_loss_propose, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
         self.log('train_reg_loss_refine', reg_loss_refine, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
         self.log('train_cls_loss', cls_loss, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
-        if USE_NATSUMI:
-            # TODO: Integrate GRLC loss
-            loss = reg_loss_propose + reg_loss_refine + cls_loss + self.encoder.agent_encoder.natsumi.loss
-        else:
-            loss = reg_loss_propose + reg_loss_refine + cls_loss  # 总损失loss是回归损失和分类损失的和，这个损失将被用于模型的反向传播
+        # TODO: Integrate GRLC loss
+        loss = reg_loss_propose + reg_loss_refine + cls_loss  # 总损失loss是回归损失和分类损失的和，这个损失将被用于模型的反向传播
 
         check_nan(loss, "Training loss contains NaN values")  # 检查损失是否包含NaN值，如果包含则抛出异常
 
@@ -409,14 +411,21 @@ class QCNet(pl.LightningModule):
         whitelist_weight_modules = (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.MultiheadAttention, nn.LSTM,  # 分别包含了应该应用权重衰减和不应该应用权重衰减
                                     nn.LSTMCell, nn.GRU, nn.GRUCell)
         blacklist_weight_modules = (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.LayerNorm, nn.Embedding)
+        param_dict = dict()  # 创建一个空字典，用于存储模型的参数名称和对应的参数对象
         for module_name, module in self.named_modules():  # 循环遍历模型中的所有模块
-            # TODO: Integrate GRLC optimizers
-            # if module_name.startswith('encoder.agent_encoder.natsumi'):
-            #     continue
-            # print(f'{module_name=}')
             for param_name, param in module.named_parameters():     # 循环遍历模中块的所有参数
                 full_param_name = '%s.%s' % (module_name, param_name) if module_name else param_name      #创建一个包含模块名称和参数名称的完整参数名称
-                if 'bias' in param_name:
+                param_dict[full_param_name] = param      # 将完整参数名称和参数对象添加到param_dict字典中
+                # DEBUG: 打印每个参数的名称和是否需要梯度计算
+                # print(f'Parameter: {full_param_name}, requires_grad: {param.requires_grad}')
+                if 'natsumi' in full_param_name:
+                    if self.natsumi_freeze is True:
+                        # Freeze parameters that are related to Natsumi
+                        param.requires_grad = False
+                        no_decay.add(full_param_name)  # 如果参数名称中包含'natsumi'，则将其设置为不需要梯度计算，并添加到no_decay集合中
+                    else:
+                        decay.add(full_param_name)
+                elif 'bias' in param_name:
                     no_decay.add(full_param_name)       # 不应用权重衰减，将其添加到no_decay集合中
                 elif 'weight' in param_name:            # 根据模块的类型决定是否应用权重衰减
                     if isinstance(module, whitelist_weight_modules):
@@ -425,61 +434,10 @@ class QCNet(pl.LightningModule):
                         no_decay.add(full_param_name)
                 elif not ('weight' in param_name or 'bias' in param_name):
                     no_decay.add(full_param_name)              # 不应用权重衰减，将其添加到no_decay集合中
-        param_dict = {param_name: param for param_name, param in self.named_parameters()}       # 创建一个字典，将参数名称映射到参数对象
         inter_params = decay & no_decay                       # 分别计算两个集合的交集和并集
         union_params = decay | no_decay
         assert len(inter_params) == 0                         # 确保没有参数同时存在于decay和no_decay集合中
         assert len(param_dict.keys() - union_params) == 0     # 确保所有参数都被正确分类到decay或no_decay集合中
-
-        # # QCNet的特征表征层设置为需要梯度,GRLC的参数设置为需要梯度
-        # parameters_to_update = [
-        #     "encoder.agent_encoder.type_a_emb.weight",
-        #     "encoder.agent_encoder.x_a_emb.freqs.weight",
-        #     "encoder.agent_encoder.x_a_emb.mlps.0.0.weight",
-        #     "encoder.agent_encoder.x_a_emb.mlps.0.1.weight",
-        #     "encoder.agent_encoder.x_a_emb.mlps.0.3.weight",
-        #     "encoder.agent_encoder.x_a_emb.mlps.1.0.weight",
-        #     "encoder.agent_encoder.x_a_emb.mlps.1.1.weight",
-        #     "encoder.agent_encoder.x_a_emb.mlps.1.3.weight",
-        #     "encoder.agent_encoder.x_a_emb.mlps.2.0.weight",
-        #     "encoder.agent_encoder.x_a_emb.mlps.2.1.weight",
-        #     "encoder.agent_encoder.x_a_emb.mlps.2.3.weight",
-        #     "encoder.agent_encoder.x_a_emb.mlps.3.0.weight",
-        #     "encoder.agent_encoder.x_a_emb.mlps.3.1.weight",
-        #     "encoder.agent_encoder.x_a_emb.mlps.3.3.weight",
-        #     "encoder.agent_encoder.x_a_emb.to_out.0.weight",
-        #     "encoder.agent_encoder.x_a_emb.to_out.2.weight",
-        #     "encoder.agent_encoder.natsumi.model.gcn_0.fc.weight",
-        #     "encoder.agent_encoder.natsumi.model.gcn_1.fc.weight",
-        #
-        #     "encoder.agent_encoder.x_a_emb.mlps.0.0.bias",
-        #     "encoder.agent_encoder.x_a_emb.mlps.0.1.bias",
-        #     "encoder.agent_encoder.x_a_emb.mlps.0.3.bias",
-        #     "encoder.agent_encoder.x_a_emb.mlps.1.0.bias",
-        #     "encoder.agent_encoder.x_a_emb.mlps.1.1.bias",
-        #     "encoder.agent_encoder.x_a_emb.mlps.1.3.bias",
-        #     "encoder.agent_encoder.x_a_emb.mlps.2.0.bias",
-        #     "encoder.agent_encoder.x_a_emb.mlps.2.1.bias",
-        #     "encoder.agent_encoder.x_a_emb.mlps.2.3.bias",
-        #     "encoder.agent_encoder.x_a_emb.mlps.3.0.bias",
-        #     "encoder.agent_encoder.x_a_emb.mlps.3.1.bias",
-        #     "encoder.agent_encoder.x_a_emb.mlps.3.3.bias",
-        #     "encoder.agent_encoder.x_a_emb.to_out.0.bias",
-        #     "encoder.agent_encoder.x_a_emb.to_out.2.bias",
-        #     "encoder.agent_encoder.natsumi.model.gcn_0.fc.bias",
-        #     "encoder.agent_encoder.natsumi.model.gcn_1.fc.bias",
-        #     "encoder.agent_encoder.natsumi.model.gcn_1.bias",
-        #     "encoder.agent_encoder.natsumi.model.gcn_0.bias"
-        # ]
-        #
-        # # Freeze parameters that are not related to GRLC
-        # for param_name in sorted(list(param_dict.keys())):  # 遍历所有参数
-        #     #print(f"{param_name}: 设置前：requires_grad={param_dict[param_name].requires_grad}")
-        #         if param_name in parameters_to_update:
-        #             param_dict[param_name].requires_grad = True
-        #         else:
-        #             param_dict[param_name].requires_grad = False  # TODO: 将其他参数的requires_grad属性设置为False，表示这些参数在训练过程中不需要计算梯度
-
 
         optim_groups = [     # 将参数传递给优化器
             {"params": [param_dict[param_name] for param_name in sorted(list(decay))],  # params键对应的值是一个列表，包含了所有应该应用权重衰减的参数
@@ -487,10 +445,6 @@ class QCNet(pl.LightningModule):
             {"params": [param_dict[param_name] for param_name in sorted(list(no_decay))],
              "weight_decay": 0.0},
         ]
-
-        for param_name in sorted(list(param_dict.keys())):  # 遍历所有参数
-            print(f"{param_name}: 设置后：requires_grad={param_dict[param_name].requires_grad}")  # 打印每个参数的名称和其requires_grad属性的值
-
 
         optimizer = torch.optim.AdamW(optim_groups, lr=self.lr, weight_decay=self.weight_decay)    # 创建了一个AdamW优化器实例，正确地应用权重衰减。这里，lr是学习率，weight_decay是全局设置的权重衰减值
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer, T_max=self.T_max, eta_min=0.0)  # 创建了一个学习率调度器，它将学习率按照余弦衰减函数进行调整。T_max是一个周期内的学习率调度次数，eta_min是学习率衰减到的最小值

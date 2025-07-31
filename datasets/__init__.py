@@ -12,3 +12,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from datasets.argoverse_v2_dataset import ArgoverseV2Dataset
+from datasets.miku_dataset import MikuDataset
+from datasets.yamai_dataset import YamaiDataset

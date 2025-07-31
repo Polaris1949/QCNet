@@ -37,6 +37,7 @@ if __name__ == '__main__':
             '--hidden_dim 128 ' # TODO
             '--max_epochs 150 '
             f'{ckpt_option} '
+            '--natsumi_ckpt ./pretrained/natsumi.ckpt '  # Natsumi预训练模型的路径
         )
     elif mode == 'val':
         cmd = (

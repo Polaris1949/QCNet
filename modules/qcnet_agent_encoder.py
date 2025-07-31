@@ -22,6 +22,7 @@ from torch_geometric.data import HeteroData
 from torch_geometric.utils import dense_to_sparse
 from torch_geometric.utils import subgraph
 
+from datasets.miku_dataset import MikuScene
 from layers.attention_layer import AttentionLayer
 from layers.fourier_embedding import FourierEmbedding
 from utils import angle_between_2d_vectors
@@ -29,7 +30,7 @@ from utils import weight_init
 from utils import wrap_angle
 
 from utils import filter_specific_edges
-from modules.natsumi import Natsumi, slide_sequence
+from predictors.natsumi import Natsumi
 
 # GRLC parameters
 MAX_NUM_AGENTS = 135
@@ -55,6 +56,7 @@ class QCNetAgentEncoder(nn.Module):
         num_heads: int,           # 多头注意力机制中的头数
         head_dim: int,            # 每个注意力头的维度
         dropout: float,           # 防止过拟合
+        natsumi: Optional[Natsumi] = None,  # Natsumi模型
     ) -> None:
         super(QCNetAgentEncoder, self).__init__()
         self.dataset = dataset
@@ -69,6 +71,8 @@ class QCNetAgentEncoder(nn.Module):
         self.num_heads = num_heads
         self.head_dim = head_dim
         self.dropout = dropout
+
+        self.natsumi = natsumi
 
         if dataset == 'argoverse_v2':
             input_dim_x_a = 4
@@ -101,11 +105,6 @@ class QCNetAgentEncoder(nn.Module):
             [AttentionLayer(hidden_dim=hidden_dim, num_heads=num_heads, head_dim=head_dim, dropout=dropout,
                             bipartite=False, has_pos_emb=True) for _ in range(num_layers)]
         )
-
-        if USE_NATSUMI:
-            # Build GRLC Model, use time slide window
-            self.natsumi = Natsumi(num_steps=SLIDE_WIDTH, num_agents=MAX_NUM_AGENTS, num_features=self.hidden_dim,
-                                   dim=self.hidden_dim, dim_x=GRLC_DIM_X, dropout=self.dropout)
 
         self.apply(weight_init)    # 初始化权重
 
@@ -212,44 +211,23 @@ class QCNetAgentEncoder(nn.Module):
         # av_other_nodes: 与中心智能体相关的其他节点索引
         # av_otas: 与中心智能体相关的其他节点索引的二维形式, shape: [2, K]
         # av_otas[0]: 时间步索引, av_otas[1]: 智能体索引
-        av_edges, av_other_nodes, av_otas = filter_specific_edges(edge_index_a2a, A=num_agents, T=self.num_historical_steps, x=av_index)  # 使用filter_specific_edges函数过滤边索引，只保留与自动驾驶车辆相关的边
+        #av_edges, av_other_nodes, av_otas = filter_specific_edges(edge_index_a2a, A=num_agents, T=self.num_historical_steps, x=av_index)  # 使用filter_specific_edges函数过滤边索引，只保留与自动驾驶车辆相关的边
         #print(f'{edge_index_a2a.shape=}, {av_edges.shape=}, {av_other_nodes.shape=}, {av_otas.shape=}')  # 打印原始边索引和过滤后的边索引的形状
         #print(f'{av_edges=}')
         #print(f'{av_other_nodes=}')
         #print(f'{av_otas=}')
 
-        if USE_NATSUMI:  # 如果使用Natsumi模型
-            # TODO: GRLC
-            num_nodes = data['agent']['num_nodes']
-            grlc_x_a = x_a.transpose(0, 1)  # 将智能体的特征张量x_a转置，使得历史步骤成为第一个维度
-            # 初始化一个空的边索引张量，用于存储处理后的边索引
-            new_edge_index_a2a = torch.empty((2, 0), dtype=torch.long, device=pos_s.device)
-            # Slide time window
-            for t, x_t in slide_sequence(grlc_x_a, SLIDE_WIDTH, SLIDE_STEP):  # 使用slide_sequence函数滑动时间窗口，获取每个时间步的特征
-                # 计算每个时间步的顶点下标范围
-                beg_idx = t * num_nodes
-                end_idx = (t + SLIDE_WIDTH) * num_nodes
-                # 过滤边索引，只保留在当前时间步内的边
-                edge_index_a2a_t = edge_index_a2a[:, (edge_index_a2a[0] >= beg_idx) & (edge_index_a2a[0] < end_idx) &
-                                                  (edge_index_a2a[1] >= beg_idx) & (edge_index_a2a[1] < end_idx)]
-                # 将边索引转换为相对于当前时间步的索引
-                edge_index_a2a_t = edge_index_a2a_t - beg_idx
-                # 调用Natsumi模型
-                edge_index_a2a_t = self.natsumi(x=x_t, edge_index=edge_index_a2a_t)  # 使用Natsumi模型处理当前时间步的特征和边索引
-                # 将边索引转换为相对于全局的索引
-                edge_index_a2a_t = edge_index_a2a_t + beg_idx
-                if t >= SLIDE_STEP:
-                    beg_idx = (t + SLIDE_WIDTH - SLIDE_STEP) * num_nodes  # 更新起始索引
-                    edge_index_a2a_t = edge_index_a2a_t[:, edge_index_a2a_t[0] >= beg_idx]  # 过滤边索引，只保留在当前时间步内的边
-                # 将处理后的边索引添加到新的边索引列表中
-                new_edge_index_a2a = torch.cat([new_edge_index_a2a, edge_index_a2a_t], dim=1)
-                # print(f'{t=}, {x_t.shape=}, {edge_index_a2a_t.shape=}, {new_edge_index_a2a.shape=}')
-
-            # TODO: GRLC always selects more (~3x) edges, is this correct?
-            # print(f'{new_edge_index_a2a.shape=}')
-            edge_index_a2a = new_edge_index_a2a
-            # FIXED: RuntimeError: element 0 of tensors does not require grad and does not have a grad_fn
-            # torch.set_grad_enabled(True)
+        if self.natsumi is not None:  # 如果使用Natsumi模型
+            # TODO: Handle batch properly
+            miku_agent = MikuScene.from_batch(data)[0].agent  # 从数据中创建MikuAgent对象
+            yamai_graphs = miku_agent.to_graphs()  # 将MikuAgent对象转换为YamaiGraph对象
+            grlc_edges = [self.natsumi.predict_edge_index(yamai_graph) for yamai_graph in yamai_graphs]  # 使用Natsumi模型预测每个YamaiGraph对象的边索引
+            grlc_edges = torch.cat(grlc_edges, dim=-1)  # 将预测的边索引连接起来
+            num_qcnet_edges = edge_index_a2a.shape[1]  # 获取原始边索引的数量
+            num_grlc_edges = grlc_edges.shape[1]  # 获取Natsumi模型预测的边索引的数量
+            # TODO: GRLC always selects more (~20x) edges, is this correct?
+            print(f'Edges, QCNet: {num_qcnet_edges}, GRLC: {num_grlc_edges}, G/Q: {num_grlc_edges / num_qcnet_edges:.2f}')
+            edge_index_a2a = grlc_edges
 
         # 计算智能体之间的相对位置和方向
         rel_pos_a2a = pos_s[edge_index_a2a[0]] - pos_s[edge_index_a2a[1]]

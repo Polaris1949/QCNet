@@ -1,5 +1,9 @@
 # Custom
 data_av2/
+lightning_logs/
+pretrained/
+test_output/
+yamai_output/
 submission.parquet
 
 # Byte-compiled / optimized / DLL files

@@ -92,9 +92,9 @@ def cosine_dist(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     cosine = frac_up / frac_down
     return cosine
 
-class Natsumi(nn.Module):
+class Yoshino(nn.Module):
     def __init__(self, num_steps: int, num_agents: int, num_features: int, dim: int, dim_x: int, dropout: float) -> None:
-        super(Natsumi, self).__init__()
+        super(Yoshino, self).__init__()
         self.num_steps = num_steps
         self.num_agents = num_agents
         self.num_nodes = num_steps * num_agents  # Total number of nodes

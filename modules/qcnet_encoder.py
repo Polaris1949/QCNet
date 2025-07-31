@@ -19,26 +19,29 @@ from torch_geometric.data import HeteroData
 
 from modules.qcnet_agent_encoder import QCNetAgentEncoder
 from modules.qcnet_map_encoder import QCNetMapEncoder
-
+from predictors.natsumi import Natsumi
 
 
 class QCNetEncoder(nn.Module):
 
-    def __init__(self,
-                 dataset: str,
-                 input_dim: int,
-                 hidden_dim: int,
-                 num_historical_steps: int,
-                 pl2pl_radius: float,       # 地图多边形之间的交互半径
-                 time_span: Optional[int],
-                 pl2a_radius: float,
-                 a2a_radius: float,
-                 num_freq_bands: int,
-                 num_map_layers: int,        # 地图编码器中的层数
-                 num_agent_layers: int,
-                 num_heads: int,
-                 head_dim: int,
-                 dropout: float) -> None:
+    def __init__(
+        self,
+        dataset: str,
+        input_dim: int,
+        hidden_dim: int,
+        num_historical_steps: int,
+        pl2pl_radius: float,       # 地图多边形之间的交互半径
+        time_span: Optional[int],
+        pl2a_radius: float,
+        a2a_radius: float,
+        num_freq_bands: int,
+        num_map_layers: int,        # 地图编码器中的层数
+        num_agent_layers: int,
+        num_heads: int,
+        head_dim: int,
+        dropout: float,
+        natsumi: Optional[Natsumi] = None,  # Natsumi模型
+    ) -> None:
         super(QCNetEncoder, self).__init__()
         self.map_encoder = QCNetMapEncoder(
             dataset=dataset,
@@ -65,6 +68,7 @@ class QCNetEncoder(nn.Module):
             num_heads=num_heads,
             head_dim=head_dim,
             dropout=dropout,
+            natsumi=natsumi,  # Natsumi模型
         )
 
     def forward(self, data: HeteroData) -> Dict[str, torch.Tensor]:        # 异构数据
