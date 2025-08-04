@@ -1,3 +1,4 @@
+from pyexpat import features
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
@@ -28,16 +29,20 @@ def natsumi_normalize_graph(structure: Tensor) -> Tensor:
 def natsumi_cosine_similarity(x: Tensor, y: Tensor) -> Tensor:
     return F.cosine_similarity(x.unsqueeze(1), y.unsqueeze(0), dim=2)
 
-def compute_grlc_inputs(graph: YamaiGraph) -> Tuple[Tensor, Tensor, Tensor]:
+def compute_grlc_inputs(graph: YamaiGraph, pad: bool) -> Tuple[Tensor, Tensor, Tensor]:
     num_nodes = graph.num_nodes
     num_edges = graph.num_edges
-    num_pad_nodes = GRLC_NUM_NODES - num_nodes
 
-    # Only pad feature dimension, since node dimension is dynamic
-    features = F.pad(graph.x, (0, 3 * num_pad_nodes, 0, 0))
+    if pad is True:
+        num_pad_nodes = GRLC_NUM_NODES - num_nodes
+        # Only pad feature dimension, since node dimension is dynamic
+        features = F.pad(graph.x, (0, 3 * num_pad_nodes, 0, 0))
+    else:
+        features = graph.x
     device = features.device
 
-    features /= (features.norm(p=1, dim=1, keepdim=True).clamp(min=0.0) + X_NORM_EPS).expand_as(features)
+    # DO NOT use /=; that causes RuntimeError: one of the variables needed for gradient computation has been modified by an inplace operation
+    features = features / (features.norm(p=1, dim=1, keepdim=True).clamp(min=0.0) + X_NORM_EPS).expand_as(features)
     structure = torch.sparse_coo_tensor(graph.edge_index, torch.ones([num_edges], device=device), [num_nodes, num_nodes]).to_dense()
     identity = torch.eye(num_nodes, device=device)
     structure = natsumi_normalize_graph(structure + identity)
@@ -60,6 +65,7 @@ class Natsumi(pl.LightningModule):
         w_loss2: float = 0.001,
         margin1: float = 0.8,
         margin2: float = 0.2,
+        feat_qcnet: bool = False,  # Whether to use QCNet features as input to Natsumi
     ) -> None:
         super().__init__()
         self.lr = lr
@@ -71,27 +77,29 @@ class Natsumi(pl.LightningModule):
         self.margin_loss = nn.MarginRankingLoss(margin=margin1, reduce=False)
         self.mask_margin = margin1 + margin2
         self.cnt_good_weights = 0
+        self.loss = None
+        self.is_pad = not feat_qcnet  # Whether to use QCNet features as input to Natsumi
 
     def configure_optimizers(self) -> Optimizer:
         return torch.optim.Adam(self.grlc.parameters(), lr=self.lr, weight_decay=self.weight_decay)
 
     def forward(self, graph: YamaiGraph) -> Tuple[Tensor, Tensor, List[Tensor], Tensor, Tensor, List[Tensor]]:
-        features, structure, identity = compute_grlc_inputs(graph)
+        features, structure, identity = compute_grlc_inputs(graph, self.is_pad)
         negative_feature_samples = [features[np.random.permutation(graph.num_nodes)] for _ in range(self.num_neg_samples)]
         return self.grlc(features, negative_feature_samples, structure, identity)
 
     def embed(self, graph: YamaiGraph) -> Tuple[Tensor, Tensor]:
-        return self.grlc.embed(*compute_grlc_inputs(graph))
+        return self.grlc.embed(*compute_grlc_inputs(graph, self.is_pad))
 
     def predict_edge_index(self, graph: YamaiGraph) -> Tensor:
         # NOTE: Following code runs under certain condition: args.dataset_name in ['Cora', 'CiteSeer']
-        features, structure, identity = compute_grlc_inputs(graph)
+        features, structure, identity = compute_grlc_inputs(graph, self.is_pad)
         negative_feature_samples = [features[np.random.permutation(graph.num_nodes)] for _ in range(self.num_neg_samples)]
         anc_embs, pos_embs, neg_embs_samples, anc_embs_aug, _, neg_embs_aug_samples = self.grlc(features, negative_feature_samples, structure, identity)
         anc_sim = natsumi_cosine_similarity(anc_embs, anc_embs).detach()
         neg_sims = [F.pairwise_distance(anc_embs, neg_embs) for neg_embs in neg_embs_samples]
         new_structure = (torch.stack(neg_sims).mean(dim=0).expand_as(structure) - anc_sim).detach()
-        zeros_struct = torch.full_like(structure, -9e15)
+        zeros_struct = torch.zeros_like(structure)
         ones_struct = torch.ones_like(structure)
         anc_sim = torch.where(structure > 0, ones_struct, zeros_struct)
         new_structure = torch.where(new_structure < 0, anc_sim, zeros_struct)
@@ -103,8 +111,12 @@ class Natsumi(pl.LightningModule):
         edge_index = edge_index[:, edge_index[0] < edge_index[1]]
         return edge_index
 
-    def training_step(self, batch: Dict[str, Any]) -> Tensor:
-        graph = YamaiGraph.from_batch(batch)
+    def training_step(self, batch: Any) -> Tensor:
+        if isinstance(batch, YamaiGraph):
+            graph = batch
+        else:
+            graph = YamaiGraph.from_batch(batch)
+
         anc_embs, pos_embs, neg_embs_samples, anc_embs_aug, _, neg_embs_aug_samples = self(graph)
         device = anc_embs.device
         pos_sim = F.pairwise_distance(anc_embs, pos_embs)
@@ -139,9 +151,10 @@ class Natsumi(pl.LightningModule):
         loss2 /= self.num_neg_samples
         loss = loss1 * self.w_loss1 + loss2 * self.w_loss2
 
-        self.log('loss', loss, prog_bar=True, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
-        self.log('loss1', loss1, prog_bar=True, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
-        self.log('loss2', loss2, prog_bar=True, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
+        # NOTE: Only Log GRLC total loss in QCNet
+        # self.log('loss', loss, prog_bar=True, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
+        # self.log('loss1', loss1, prog_bar=True, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
+        # self.log('loss2', loss2, prog_bar=True, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
         return loss
 
 

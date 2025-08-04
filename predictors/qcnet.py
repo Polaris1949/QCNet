@@ -15,7 +15,7 @@ import os.path
 from itertools import chain
 from itertools import compress
 from pathlib import Path
-from typing import Optional
+from typing import Optional, ClassVar
 
 import pytorch_lightning as pl
 import torch
@@ -34,7 +34,6 @@ from metrics import minFDE
 from metrics import minFHE
 from modules import QCNetDecoder
 from modules import QCNetEncoder
-from modules.qcnet_agent_encoder import USE_NATSUMI
 from utils.mukuro import check_nan
 
 
@@ -45,6 +44,9 @@ except ImportError:
 
 
 class QCNet(pl.LightningModule):
+    # HACK: Singleton instance
+    instance: ClassVar[Optional['QCNet']] = None
+
     def __init__(
         self,
         dataset: str,
@@ -78,6 +80,7 @@ class QCNet(pl.LightningModule):
         natsumi: bool = False,
         natsumi_ckpt: Optional[str] = None,
         natsumi_freeze: bool = True,
+        natsumi_feat_qcnet: bool = False,
         **kwargs,
     ) -> None:
         super(QCNet, self).__init__()
@@ -111,9 +114,15 @@ class QCNet(pl.LightningModule):
         self.submission_dir = submission_dir
         self.submission_file_name = submission_file_name
 
+        # HACK: Singleton instance
+        QCNet.instance = self
+
         if natsumi is True:
             from predictors.natsumi import Natsumi, GRLC_NUM_FEATURES, GRLC_HIDDEN_DIM
-            if natsumi_ckpt is None:
+            if natsumi_feat_qcnet is True:
+                self.natsumi = Natsumi(num_features=hidden_dim, hidden_dim=GRLC_HIDDEN_DIM, feat_qcnet=True)
+                self.natsumi_freeze = False
+            elif natsumi_ckpt is None:
                 self.natsumi = Natsumi(num_features=GRLC_NUM_FEATURES, hidden_dim=GRLC_HIDDEN_DIM)
                 self.natsumi_freeze = False
             else:
@@ -139,6 +148,8 @@ class QCNet(pl.LightningModule):
             head_dim=head_dim,
             dropout=dropout,
             natsumi=self.natsumi,
+            natsumi_freeze=self.natsumi_freeze,
+            natsumi_feat_qcnet= natsumi_feat_qcnet,
         )
         self.decoder = QCNetDecoder(
             dataset=dataset,
@@ -230,6 +241,9 @@ class QCNet(pl.LightningModule):
 
         # TODO: Integrate GRLC loss
         loss = reg_loss_propose + reg_loss_refine + cls_loss  # 总损失loss是回归损失和分类损失的和，这个损失将被用于模型的反向传播
+        if self.natsumi is not None and self.natsumi_freeze is False:
+            self.log('grlc_loss', self.natsumi.loss, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
+            loss += self.natsumi.loss
         check_nan(loss, "Training loss contains NaN values")  # 检查损失是否包含NaN值，如果包含则抛出异常
         # print(f'the training loss is {loss.item()}')  # 打印当前的训练损失值
         return loss

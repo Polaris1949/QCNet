@@ -23,8 +23,10 @@ from torch_geometric.utils import dense_to_sparse
 from torch_geometric.utils import subgraph
 
 from datasets.miku_dataset import MikuScene
+from datasets.yamai_common import YamaiGraph
 from layers.attention_layer import AttentionLayer
 from layers.fourier_embedding import FourierEmbedding
+from modules.yoshino import slide_sequence
 from utils import angle_between_2d_vectors
 from utils import weight_init
 from utils import wrap_angle
@@ -57,6 +59,8 @@ class QCNetAgentEncoder(nn.Module):
         head_dim: int,            # 每个注意力头的维度
         dropout: float,           # 防止过拟合
         natsumi: Optional[Natsumi] = None,  # Natsumi模型
+        natsumi_freeze: bool = True,  # 是否冻结Natsumi模型的参数
+        natsumi_feat_qcnet: bool = False,  # 是否使用QCNet的特征作为Natsumi输入
     ) -> None:
         super(QCNetAgentEncoder, self).__init__()
         self.dataset = dataset
@@ -73,6 +77,8 @@ class QCNetAgentEncoder(nn.Module):
         self.dropout = dropout
 
         self.natsumi = natsumi
+        self.natsumi_freeze = natsumi_freeze
+        self.natsumi_feat_qcnet = natsumi_feat_qcnet
 
         if dataset == 'argoverse_v2':
             input_dim_x_a = 4
@@ -218,15 +224,61 @@ class QCNetAgentEncoder(nn.Module):
         #print(f'{av_otas=}')
 
         if self.natsumi is not None:  # 如果使用Natsumi模型
-            # TODO: Handle batch properly
-            miku_agent = MikuScene.from_batch(data)[0].agent  # 从数据中创建MikuAgent对象
-            yamai_graphs = miku_agent.to_graphs()  # 将MikuAgent对象转换为YamaiGraph对象
-            grlc_edges = [self.natsumi.predict_edge_index(yamai_graph) for yamai_graph in yamai_graphs]  # 使用Natsumi模型预测每个YamaiGraph对象的边索引
-            grlc_edges = torch.cat(grlc_edges, dim=-1)  # 将预测的边索引连接起来
+            if self.natsumi_feat_qcnet is True:
+                num_nodes = data['agent']['num_nodes']
+                natsumi_losses = []  # 用于存储Natsumi模型的损失
+                # 将智能体的特征张量x_a转置，使得历史步骤成为第一个维度
+                grlc_x_a = x_a.transpose(0, 1)
+                grlc_edges = []
+                # Slide time window
+                for t, x_t in slide_sequence(grlc_x_a, SLIDE_WIDTH, SLIDE_STEP):  # 使用slide_sequence函数滑动时间窗口，获取每个时间步的特征
+                    x_t = x_t.reshape(-1, self.hidden_dim)  # 将每个时间步的特征张量重塑为二维形式
+                    # 计算每个时间步的顶点下标范围
+                    beg_idx = t * num_nodes
+                    end_idx = (t + SLIDE_WIDTH) * num_nodes
+                    # 过滤边索引，只保留在当前时间步内的边
+                    edge_index_a2a_t = edge_index_a2a[:,
+                                       (edge_index_a2a[0] >= beg_idx) & (edge_index_a2a[0] < end_idx) &
+                                       (edge_index_a2a[1] >= beg_idx) & (edge_index_a2a[1] < end_idx)]
+                    # 将边索引转换为相对于当前时间步的索引
+                    edge_index_a2a_t = edge_index_a2a_t - beg_idx
+                    # 创建YamaiGraph对象，包含当前时间步的特征和边索引
+                    yamai_graph = YamaiGraph(x=x_t, edge_index=edge_index_a2a_t)
+                    # 调用Natsumi模型
+                    if self.training is True:
+                        natsumi_losses.append(self.natsumi.training_step(yamai_graph))  # 使用Natsumi模型处理当前时间步的特征和边索引
+                    edge_index_a2a_t = self.natsumi.predict_edge_index(yamai_graph)  # 使用Natsumi模型预测边索引
+                    # 将边索引转换为相对于全局的索引
+                    edge_index_a2a_t = edge_index_a2a_t + beg_idx
+                    if t >= SLIDE_STEP:
+                        beg_idx = (t + SLIDE_WIDTH - SLIDE_STEP) * num_nodes  # 更新起始索引
+                        edge_index_a2a_t = edge_index_a2a_t[:, edge_index_a2a_t[0] >= beg_idx]  # 过滤边索引，只保留在当前时间步内的边
+                    # 将处理后的边索引添加到新的边索引列表中
+                    grlc_edges.append(edge_index_a2a_t)
+
+                self.natsumi.loss = torch.stack(natsumi_losses).mean() if self.training is True else None
+                grlc_edges = torch.cat(grlc_edges, dim=-1)  # 将处理后的边索引连接起来
+            else:
+                # TODO: Handle batch properly
+                miku_agent = MikuScene.from_batch(data)[0].agent  # 从数据中创建MikuAgent对象
+                yamai_graphs = miku_agent.to_graphs()  # 将MikuAgent对象转换为YamaiGraph对象
+                natsumi_losses = []  # 用于存储Natsumi模型的损失
+                grlc_edges = []  # 用于存储Natsumi模型预测的边索引
+                for yamai_graph in yamai_graphs:
+                    if self.training is True and self.natsumi_freeze is False:
+                        natsumi_losses.append(self.natsumi.training_step(yamai_graph))  # 如果Natsumi模型没有冻结，则进行一次训练步骤
+                    grlc_edges.append(self.natsumi.predict_edge_index(yamai_graph))  # 使用Natsumi模型预测每个YamaiGraph对象的边索引
+
+                self.natsumi.loss = torch.stack(natsumi_losses).mean() if self.training is True and self.natsumi_freeze is False else None  # 如果有Natsumi模型的损失，则取平均值
+                grlc_edges = torch.cat(grlc_edges, dim=-1)  # 将预测的边索引连接起来
+
             # TODO: GRLC always selects more (~20x) edges, is this correct?
-            # num_qcnet_edges = edge_index_a2a.shape[1]  # 获取原始边索引的数量
-            # num_grlc_edges = grlc_edges.shape[1]  # 获取Natsumi模型预测的边索引的数量
-            # print(f'Edges, QCNet: {num_qcnet_edges}, GRLC: {num_grlc_edges}, G/Q: {num_grlc_edges / num_qcnet_edges:.2f}')
+            num_qcnet_edges = edge_index_a2a.shape[1]  # 获取原始边索引的数量
+            num_grlc_edges = grlc_edges.shape[1]  # 获取Natsumi模型预测的边索引的数量
+            edges_gvq = num_grlc_edges / num_qcnet_edges
+            # print(f'Edges, QCNet: {num_qcnet_edges}, GRLC: {num_grlc_edges}, G/Q: {edges_gvq:.2f}')
+            from predictors.qcnet import QCNet
+            QCNet.instance.log('edges_gvq', edges_gvq, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
             edge_index_a2a = grlc_edges
 
         # 计算智能体之间的相对位置和方向
@@ -237,6 +289,8 @@ class QCNetAgentEncoder(nn.Module):
              angle_between_2d_vectors(ctr_vector=head_vector_s[edge_index_a2a[1]], nbr_vector=rel_pos_a2a[:, :2]),
              rel_head_a2a], dim=-1)
         r_a2a = self.r_a2a_emb(continuous_inputs=r_a2a, categorical_embs=None)     # 将构建的关系特征向量r_a2a传递给智能体之间的关系嵌入层self.r_a2a_emb进行嵌入
+
+        # print(f'The shape of r_a2a: {r_a2a.shape}')  # 打印智能体之间关系特征向量的形状
 
         # 通过多层注意力机制来更新智能体的特征表示 x_a
         for i in range(self.num_layers):

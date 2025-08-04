@@ -41,6 +41,8 @@ class QCNetEncoder(nn.Module):
         head_dim: int,
         dropout: float,
         natsumi: Optional[Natsumi] = None,  # Natsumi模型
+        natsumi_freeze: bool = True,  # 是否冻结Natsumi模型的参数
+        natsumi_feat_qcnet: bool = False,  # 是否使用QCNet的特征作为Natsumi输入
     ) -> None:
         super(QCNetEncoder, self).__init__()
         self.map_encoder = QCNetMapEncoder(
@@ -69,6 +71,8 @@ class QCNetEncoder(nn.Module):
             head_dim=head_dim,
             dropout=dropout,
             natsumi=natsumi,  # Natsumi模型
+            natsumi_freeze=natsumi_freeze,  # 是否冻结Natsumi模型的参数
+            natsumi_feat_qcnet=natsumi_feat_qcnet,  # 是否使用QCNet的特征作为Natsumi输入
         )
 
     def forward(self, data: HeteroData) -> Dict[str, torch.Tensor]:        # 异构数据
