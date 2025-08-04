@@ -1,4 +1,3 @@
-from pyexpat import features
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
@@ -83,15 +82,8 @@ class Natsumi(pl.LightningModule):
     def configure_optimizers(self) -> Optimizer:
         return torch.optim.Adam(self.grlc.parameters(), lr=self.lr, weight_decay=self.weight_decay)
 
-    def forward(self, graph: YamaiGraph) -> Tuple[Tensor, Tensor, List[Tensor], Tensor, Tensor, List[Tensor]]:
-        features, structure, identity = compute_grlc_inputs(graph, self.is_pad)
-        negative_feature_samples = [features[np.random.permutation(graph.num_nodes)] for _ in range(self.num_neg_samples)]
-        return self.grlc(features, negative_feature_samples, structure, identity)
-
-    def embed(self, graph: YamaiGraph) -> Tuple[Tensor, Tensor]:
-        return self.grlc.embed(*compute_grlc_inputs(graph, self.is_pad))
-
-    def predict_edge_index(self, graph: YamaiGraph) -> Tensor:
+    def forward(self, graph: YamaiGraph) -> Tensor:
+        # NOTE: This function now returns edge_index directly and does not compute loss. If you want to train, call training_step instead.
         # NOTE: Following code runs under certain condition: args.dataset_name in ['Cora', 'CiteSeer']
         features, structure, identity = compute_grlc_inputs(graph, self.is_pad)
         negative_feature_samples = [features[np.random.permutation(graph.num_nodes)] for _ in range(self.num_neg_samples)]
@@ -111,13 +103,16 @@ class Natsumi(pl.LightningModule):
         edge_index = edge_index[:, edge_index[0] < edge_index[1]]
         return edge_index
 
-    def training_step(self, batch: Any) -> Tensor:
+    def training_step(self, batch: Any) -> Dict[str, Tensor]:
         if isinstance(batch, YamaiGraph):
             graph = batch
         else:
             graph = YamaiGraph.from_batch(batch)
 
-        anc_embs, pos_embs, neg_embs_samples, anc_embs_aug, _, neg_embs_aug_samples = self(graph)
+        features, structure, identity = compute_grlc_inputs(graph, self.is_pad)
+        negative_feature_samples = [features[np.random.permutation(graph.num_nodes)] for _ in range(self.num_neg_samples)]
+        anc_embs, pos_embs, neg_embs_samples, anc_embs_aug, _, neg_embs_aug_samples = self.grlc(features, negative_feature_samples, structure, identity)
+
         device = anc_embs.device
         pos_sim = F.pairwise_distance(anc_embs, pos_embs)
         neg_aug_sims = [F.pairwise_distance(anc_embs_aug, neg_embs_aug) for neg_embs_aug in neg_embs_aug_samples]
@@ -155,7 +150,23 @@ class Natsumi(pl.LightningModule):
         # self.log('loss', loss, prog_bar=True, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
         # self.log('loss1', loss1, prog_bar=True, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
         # self.log('loss2', loss2, prog_bar=True, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
-        return loss
+
+        # NOTE: Following code runs under certain condition: args.dataset_name in ['Cora', 'CiteSeer']
+        anc_sim = natsumi_cosine_similarity(anc_embs, anc_embs).detach()
+        neg_sims = [F.pairwise_distance(anc_embs, neg_embs) for neg_embs in neg_embs_samples]
+        new_structure = (torch.stack(neg_sims).mean(dim=0).expand_as(structure) - anc_sim).detach()
+        zeros_struct = torch.zeros_like(structure)
+        ones_struct = torch.ones_like(structure)
+        anc_sim = torch.where(structure > 0, ones_struct, zeros_struct)
+        new_structure = torch.where(new_structure < 0, anc_sim, zeros_struct)
+        new_structure = natsumi_normalize_graph(new_structure)
+
+        # Convert adjacency matrix new_structure to edge index
+        edge_index = new_structure.nonzero().t()
+        # The graph is undirected, so we only keep one direction of edges.
+        edge_index = edge_index[:, edge_index[0] < edge_index[1]]
+
+        return {'loss': loss, 'edge_index': edge_index}
 
 
 if __name__ == '__main__':

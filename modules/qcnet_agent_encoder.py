@@ -246,8 +246,11 @@ class QCNetAgentEncoder(nn.Module):
                     yamai_graph = YamaiGraph(x=x_t, edge_index=edge_index_a2a_t)
                     # 调用Natsumi模型
                     if self.training is True:
-                        natsumi_losses.append(self.natsumi.training_step(yamai_graph))  # 使用Natsumi模型处理当前时间步的特征和边索引
-                    edge_index_a2a_t = self.natsumi.predict_edge_index(yamai_graph)  # 使用Natsumi模型预测边索引
+                        train_results = self.natsumi.training_step(yamai_graph)  # 使用Natsumi模型处理当前时间步的特征和边索引
+                        natsumi_losses.append(train_results['loss'])
+                        edge_index_a2a_t = train_results['edge_index']
+                    else:
+                        edge_index_a2a_t = self.natsumi(yamai_graph)  # 使用Natsumi模型预测边索引
                     # 将边索引转换为相对于全局的索引
                     edge_index_a2a_t = edge_index_a2a_t + beg_idx
                     if t >= SLIDE_STEP:
@@ -256,7 +259,8 @@ class QCNetAgentEncoder(nn.Module):
                     # 将处理后的边索引添加到新的边索引列表中
                     grlc_edges.append(edge_index_a2a_t)
 
-                self.natsumi.loss = torch.stack(natsumi_losses).mean() if self.training is True else None
+                if self.training is True:
+                    self.natsumi.loss = torch.stack(natsumi_losses).mean()
                 grlc_edges = torch.cat(grlc_edges, dim=-1)  # 将处理后的边索引连接起来
             else:
                 # TODO: Handle batch properly
@@ -266,10 +270,15 @@ class QCNetAgentEncoder(nn.Module):
                 grlc_edges = []  # 用于存储Natsumi模型预测的边索引
                 for yamai_graph in yamai_graphs:
                     if self.training is True and self.natsumi_freeze is False:
-                        natsumi_losses.append(self.natsumi.training_step(yamai_graph))  # 如果Natsumi模型没有冻结，则进行一次训练步骤
-                    grlc_edges.append(self.natsumi.predict_edge_index(yamai_graph))  # 使用Natsumi模型预测每个YamaiGraph对象的边索引
+                        # 如果Natsumi模型没有冻结，则进行一次训练步骤
+                        train_results = self.natsumi.training_step(yamai_graph)
+                        natsumi_losses.append(train_results['loss'])
+                        grlc_edges.append(train_results['edge_index'])
+                    else:
+                        grlc_edges.append(self.natsumi(yamai_graph))  # 使用Natsumi模型预测每个YamaiGraph对象的边索引
 
-                self.natsumi.loss = torch.stack(natsumi_losses).mean() if self.training is True and self.natsumi_freeze is False else None  # 如果有Natsumi模型的损失，则取平均值
+                if self.training is True and self.natsumi_freeze is False:
+                    self.natsumi.loss = torch.stack(natsumi_losses).mean()  # 如果有Natsumi模型的损失，则取平均值
                 grlc_edges = torch.cat(grlc_edges, dim=-1)  # 将预测的边索引连接起来
 
             # TODO: GRLC always selects more (~20x) edges, is this correct?
@@ -289,8 +298,6 @@ class QCNetAgentEncoder(nn.Module):
              angle_between_2d_vectors(ctr_vector=head_vector_s[edge_index_a2a[1]], nbr_vector=rel_pos_a2a[:, :2]),
              rel_head_a2a], dim=-1)
         r_a2a = self.r_a2a_emb(continuous_inputs=r_a2a, categorical_embs=None)     # 将构建的关系特征向量r_a2a传递给智能体之间的关系嵌入层self.r_a2a_emb进行嵌入
-
-        # print(f'The shape of r_a2a: {r_a2a.shape}')  # 打印智能体之间关系特征向量的形状
 
         # 通过多层注意力机制来更新智能体的特征表示 x_a
         for i in range(self.num_layers):
