@@ -14,7 +14,6 @@
 from argparse import ArgumentParser
 
 import pytorch_lightning as pl
-import torch
 from pytorch_lightning.callbacks import LearningRateMonitor
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.strategies import DDPStrategy
@@ -55,6 +54,8 @@ if __name__ == '__main__':
     parser.add_argument('--natsumi_ckpt', type=str, default=None)  # Natsumi预训练模型的路径
     parser.add_argument('--natsumi_freeze', action='store_true')  # 是否冻结Natsumi模型的参数
     parser.add_argument('--natsumi_feat_qcnet', action='store_true')  # 是否使用QCNet的特征作为Natsumi输入
+    parser.add_argument('--num_grlc_steps', type=int, default=10)  # GRLC步骤数
+    parser.add_argument('--save_grlc_structure', action='store_true')  # 是否保存GRLC结构
     QCNet.add_model_specific_args(parser)          # 允许模型添加特定的参数
     args = parser.parse_args()
 
@@ -68,8 +69,9 @@ if __name__ == '__main__':
     }[args.dataset](**vars(args))
     model_checkpoint = ModelCheckpoint(monitor='val_minFDE', save_top_k=5, mode='min')   # model_checkpoint 是一个模型检查点回调；最小最终位移误差minFDE，保存最佳5个模型
     lr_monitor = LearningRateMonitor(logging_interval='epoch')                  # 学习率监控器，用于在每个epoch后记录学习率
-#    strategy = DDPStrategy(find_unused_parameters=False, gradient_as_bucket_view=True)
+    find_unused_parameters = args.natsumi_ckpt is not None and args.natsumi_freeze is True  # 是否冻结Natsumi模型的参数，若冻结则在分布式训练中查找未使用的参数
+    strategy = DDPStrategy(process_group_backend='gloo', find_unused_parameters=find_unused_parameters, gradient_as_bucket_view=True)  # DDPStrategy用于在多个 GPU 上并行训练模型；find_unused_parameters=False 参数用于优化性能，当模型非常大且包含未使用的参数时，可以提高效率；gradient_as_bucket_view=True 是一个性能优化选项，它允许在多 GPU 训练时减少内存使用。
     trainer = pl.Trainer(accelerator=args.accelerator, devices=args.devices,    # trainer包含了训练、验证和测试过程的所有细节
-                         strategy=DDPStrategy(process_group_backend='gloo',find_unused_parameters=True, gradient_as_bucket_view=True),  # DDPStrategy用于在多个 GPU 上并行训练模型；find_unused_parameters=False 参数用于优化性能，当模型非常大且包含未使用的参数时，可以提高效率；gradient_as_bucket_view=True 是一个性能优化选项，它允许在多 GPU 训练时减少内存使用。
+                         strategy=strategy,  # strategy: 指定分布式训练的策略
                          callbacks=[model_checkpoint, lr_monitor], max_epochs=args.max_epochs)  #callbacks: 指定在训练过程中要使用的回调函数列表
     trainer.fit(model, datamodule)  # 数据预处理，得到整体的指标，训练时使用

@@ -206,25 +206,18 @@ class QCNetAgentEncoder(nn.Module):
 
         # TODO: Visualize selected edges
         # FIXME: Assume batch_size=1
-        num_agents = data['agent']['num_nodes']  # 获取当前批次中智能体的数量
-        av_index = data['agent']['av_index'][0]  # 获取当前批次中智能体的索引
-        #max_index = num_agents * self.num_historical_steps  # 获取当前批次中智能体的最大索引
-        #print(f'{pos_a.shape=}, {pos_s.shape=}')
-        #print(f'{num_agents=}, {av_index=}, {max_index=}')
-        #print(f'{edge_index_a2a=}')
+        # num_agents = data['agent']['num_nodes']  # 获取当前批次中智能体的数量
+        # av_index = data['agent']['av_index'][0]  # 获取当前批次中智能体的索引
         # 筛选出与中心智能体相关的智能体
         # av_edges: 与中心智能体相关的边索引
         # av_other_nodes: 与中心智能体相关的其他节点索引
         # av_otas: 与中心智能体相关的其他节点索引的二维形式, shape: [2, K]
         # av_otas[0]: 时间步索引, av_otas[1]: 智能体索引
-        #av_edges, av_other_nodes, av_otas = filter_specific_edges(edge_index_a2a, A=num_agents, T=self.num_historical_steps, x=av_index)  # 使用filter_specific_edges函数过滤边索引，只保留与自动驾驶车辆相关的边
-        #print(f'{edge_index_a2a.shape=}, {av_edges.shape=}, {av_other_nodes.shape=}, {av_otas.shape=}')  # 打印原始边索引和过滤后的边索引的形状
-        #print(f'{av_edges=}')
-        #print(f'{av_other_nodes=}')
-        #print(f'{av_otas=}')
+        # av_edges, av_other_nodes, av_otas = filter_specific_edges(edge_index_a2a, A=num_agents, T=self.num_historical_steps, x=av_index)  # 使用filter_specific_edges函数过滤边索引，只保留与自动驾驶车辆相关的边
 
         if self.natsumi is not None:  # 如果使用Natsumi模型
             if self.natsumi_feat_qcnet is True:
+                scene_id = data['scenario_id'][0]  # 获取场景ID
                 num_nodes = data['agent']['num_nodes']
                 natsumi_losses = []  # 用于存储Natsumi模型的损失
                 # 将智能体的特征张量x_a转置，使得历史步骤成为第一个维度
@@ -243,7 +236,7 @@ class QCNetAgentEncoder(nn.Module):
                     # 将边索引转换为相对于当前时间步的索引
                     edge_index_a2a_t = edge_index_a2a_t - beg_idx
                     # 创建YamaiGraph对象，包含当前时间步的特征和边索引
-                    yamai_graph = YamaiGraph(x=x_t, edge_index=edge_index_a2a_t)
+                    yamai_graph = YamaiGraph(scene_id=scene_id, x=x_t, edge_index=edge_index_a2a_t)
                     # 调用Natsumi模型
                     if self.training is True:
                         train_results = self.natsumi.training_step(yamai_graph)  # 使用Natsumi模型处理当前时间步的特征和边索引

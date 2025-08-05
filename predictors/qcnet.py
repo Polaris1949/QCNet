@@ -81,6 +81,8 @@ class QCNet(pl.LightningModule):
         natsumi_ckpt: Optional[str] = None,
         natsumi_freeze: bool = True,
         natsumi_feat_qcnet: bool = False,
+        num_grlc_steps: int = 10,  # GRLC步骤数
+        save_grlc_structure: bool = False,  # 是否保存GRLC结构
         **kwargs,
     ) -> None:
         super(QCNet, self).__init__()
@@ -120,13 +122,13 @@ class QCNet(pl.LightningModule):
         if natsumi is True:
             from predictors.natsumi import Natsumi, GRLC_NUM_FEATURES, GRLC_HIDDEN_DIM
             if natsumi_feat_qcnet is True:
-                self.natsumi = Natsumi(num_features=hidden_dim, hidden_dim=GRLC_HIDDEN_DIM, feat_qcnet=True)
+                self.natsumi = Natsumi(num_features=hidden_dim, hidden_dim=GRLC_HIDDEN_DIM, feat_qcnet=True, num_grlc_steps=num_grlc_steps, save_grlc_structure=save_grlc_structure)
                 self.natsumi_freeze = False
             elif natsumi_ckpt is None:
-                self.natsumi = Natsumi(num_features=GRLC_NUM_FEATURES, hidden_dim=GRLC_HIDDEN_DIM)
+                self.natsumi = Natsumi(num_features=GRLC_NUM_FEATURES, hidden_dim=GRLC_HIDDEN_DIM, num_grlc_steps=num_grlc_steps, save_grlc_structure=save_grlc_structure)
                 self.natsumi_freeze = False
             else:
-                self.natsumi = Natsumi.load_from_checkpoint(natsumi_ckpt, num_features=GRLC_NUM_FEATURES, hidden_dim=GRLC_HIDDEN_DIM)
+                self.natsumi = Natsumi.load_from_checkpoint(natsumi_ckpt, num_features=GRLC_NUM_FEATURES, hidden_dim=GRLC_HIDDEN_DIM, num_grlc_steps=num_grlc_steps, save_grlc_structure=save_grlc_structure)
                 self.natsumi_freeze = natsumi_freeze
         else:
             self.natsumi = None
@@ -184,6 +186,10 @@ class QCNet(pl.LightningModule):
         self.MR = MR(max_guesses=6)          # 初始化一个漏检率计算对象，用于评估模型在检测任务中的性能
 
         self.test_predictions = dict()   # 初始化一个字典，用于存储测试过程中的预测结果
+
+    def on_fit_start(self) -> None:
+        if self.natsumi is not None:
+            self.natsumi.on_fit_start()
 
     # 前向传播过程
     def forward(self, data: HeteroData):

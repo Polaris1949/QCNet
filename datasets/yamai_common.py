@@ -14,6 +14,7 @@ NODE_FULL_GRAPH = torch.tensor([(i, j) for i in range(NUM_NODES) for j in range(
 
 @dataclass
 class YamaiGraph:
+    scene_id: str  # FIXME: from_batch... do not assign this
     x: torch.Tensor
     edge_index: torch.Tensor
 

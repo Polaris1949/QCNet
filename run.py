@@ -9,6 +9,8 @@ IS_LOAD_NATSUMI_CKPT = False  # 是否加载Natsumi预训练模型
 NATSUMI_CKPT = './pretrained/natsumi.ckpt'  # Natsumi预训练模型的路径
 NATSUMI_FREEZE = True  # 是否冻结Natsumi模型的参数
 NATSUMI_FEAT_QCNET = True  # 是否使用QCNet的特征作为Natsumi输入
+NUM_GRLC_STEPS = 10  # GRLC步骤数
+SAVE_GRLC_STRUCTURE = True  # 是否保存GRLC结构
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -24,6 +26,7 @@ if __name__ == '__main__':
         natsumi_ckpt_option = f'--natsumi_ckpt {NATSUMI_CKPT}' if IS_LOAD_NATSUMI_CKPT else ''
         natsumi_freeze_option = '--natsumi_freeze' if NATSUMI_FREEZE else ''
         natsumi_feat_qcnet_option = '--natsumi_feat_qcnet' if NATSUMI_FEAT_QCNET else ''
+        save_grlc_struct_option = '--save_grlc_structure' if SAVE_GRLC_STRUCTURE else ''
         cmd = (
             'python train_qcnet.py '
             f'--root {DATASET_ROOT} '
@@ -49,6 +52,8 @@ if __name__ == '__main__':
             f'{natsumi_ckpt_option} '  # Natsumi预训练模型的路径
             f'{natsumi_freeze_option} '  # 是否冻结Natsumi模型的参数
             f'{natsumi_feat_qcnet_option} '  # 是否使用QCNet的特征作为Natsumi输入
+            f'--num_grlc_steps {NUM_GRLC_STEPS} '  # GRLC步骤数
+            f'{save_grlc_struct_option} '  # 是否保存GRLC结构
         )
     elif mode == 'val':
         cmd = (

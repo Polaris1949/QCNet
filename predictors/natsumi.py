@@ -1,4 +1,5 @@
-from typing import Any, Dict, List, Tuple
+import os.path
+from typing import Any, Dict, Tuple
 
 import numpy as np
 import pytorch_lightning as pl
@@ -28,7 +29,7 @@ def natsumi_normalize_graph(structure: Tensor) -> Tensor:
 def natsumi_cosine_similarity(x: Tensor, y: Tensor) -> Tensor:
     return F.cosine_similarity(x.unsqueeze(1), y.unsqueeze(0), dim=2)
 
-def compute_grlc_inputs(graph: YamaiGraph, pad: bool) -> Tuple[Tensor, Tensor, Tensor]:
+def compute_grlc_inputs(graph: YamaiGraph, *, pad: bool, load: bool) -> Tuple[Tensor, Tensor, Tensor]:
     num_nodes = graph.num_nodes
     num_edges = graph.num_edges
 
@@ -42,9 +43,17 @@ def compute_grlc_inputs(graph: YamaiGraph, pad: bool) -> Tuple[Tensor, Tensor, T
 
     # DO NOT use /=; that causes RuntimeError: one of the variables needed for gradient computation has been modified by an inplace operation
     features = features / (features.norm(p=1, dim=1, keepdim=True).clamp(min=0.0) + X_NORM_EPS).expand_as(features)
-    structure = torch.sparse_coo_tensor(graph.edge_index, torch.ones([num_edges], device=device), [num_nodes, num_nodes]).to_dense()
     identity = torch.eye(num_nodes, device=device)
-    structure = natsumi_normalize_graph(structure + identity)
+
+    from predictors import QCNet
+    log_dir = QCNet.instance.trainer.log_dir
+    if load is True and os.path.exists(f'{log_dir}/structures/{graph.scene_id}.pt'):
+        structure = torch.load(f'{log_dir}/structures/{graph.scene_id}.pt', map_location=device)
+        # if structure.shape != (num_nodes, num_nodes):
+        #     raise ValueError(f"Structure shape mismatch: expected {(num_nodes, num_nodes)}, got {structure.shape}")
+    else:
+        structure = torch.sparse_coo_tensor(graph.edge_index, torch.ones([num_edges], device=device), [num_nodes, num_nodes]).to_dense()
+        structure = natsumi_normalize_graph(structure + identity)
 
     return features, structure, identity
 
@@ -65,6 +74,8 @@ class Natsumi(pl.LightningModule):
         margin1: float = 0.8,
         margin2: float = 0.2,
         feat_qcnet: bool = False,  # Whether to use QCNet features as input to Natsumi
+        num_grlc_steps: int = 10,
+        save_grlc_structure: bool = False,  # Whether to save GRLC structure
     ) -> None:
         super().__init__()
         self.lr = lr
@@ -78,14 +89,24 @@ class Natsumi(pl.LightningModule):
         self.cnt_good_weights = 0
         self.loss = None
         self.is_pad = not feat_qcnet  # Whether to use QCNet features as input to Natsumi
+        self.num_grlc_steps = num_grlc_steps
+        self.save_grlc_structure = save_grlc_structure
+
+    def on_fit_start(self) -> None:
+        # Ensure log dir exists
+        if self.save_grlc_structure is True:
+            from predictors import QCNet
+            log_dir = QCNet.instance.trainer.log_dir
+            os.makedirs(f'{log_dir}/structures', exist_ok=True)
 
     def configure_optimizers(self) -> Optimizer:
         return torch.optim.Adam(self.grlc.parameters(), lr=self.lr, weight_decay=self.weight_decay)
 
     def forward(self, graph: YamaiGraph) -> Tensor:
-        # NOTE: This function now returns edge_index directly and does not compute loss. If you want to train, call training_step instead.
-        # NOTE: Following code runs under certain condition: args.dataset_name in ['Cora', 'CiteSeer']
-        features, structure, identity = compute_grlc_inputs(graph, self.is_pad)
+        # NOTE: This function now predicts edge_index directly and does not compute loss.
+        # If you want to train, call training_step instead.
+        # This function now never loads the structure from disk.
+        features, structure, identity = compute_grlc_inputs(graph, pad=self.is_pad, load=False)
         negative_feature_samples = [features[np.random.permutation(graph.num_nodes)] for _ in range(self.num_neg_samples)]
         anc_embs, pos_embs, neg_embs_samples, anc_embs_aug, _, neg_embs_aug_samples = self.grlc(features, negative_feature_samples, structure, identity)
         anc_sim = natsumi_cosine_similarity(anc_embs, anc_embs).detach()
@@ -109,58 +130,72 @@ class Natsumi(pl.LightningModule):
         else:
             graph = YamaiGraph.from_batch(batch)
 
-        features, structure, identity = compute_grlc_inputs(graph, self.is_pad)
-        negative_feature_samples = [features[np.random.permutation(graph.num_nodes)] for _ in range(self.num_neg_samples)]
-        anc_embs, pos_embs, neg_embs_samples, anc_embs_aug, _, neg_embs_aug_samples = self.grlc(features, negative_feature_samples, structure, identity)
+        features, structure, identity = compute_grlc_inputs(graph, pad=self.is_pad, load=self.save_grlc_structure)
+        losses = []
 
-        device = anc_embs.device
-        pos_sim = F.pairwise_distance(anc_embs, pos_embs)
-        neg_aug_sims = [F.pairwise_distance(anc_embs_aug, neg_embs_aug) for neg_embs_aug in neg_embs_aug_samples]
+        for _ in range(self.num_grlc_steps):
+            negative_feature_samples = [features[np.random.permutation(graph.num_nodes)] for _ in range(self.num_neg_samples)]
+            anc_embs, pos_embs, neg_embs_samples, anc_embs_aug, _, neg_embs_aug_samples = self.grlc(features, negative_feature_samples, structure, identity)
 
-        neg_aug_sims = torch.stack(neg_aug_sims).detach()
-        neg_aug_sim_min = neg_aug_sims.min(dim=0).values
-        neg_aug_sim_max = neg_aug_sims.max(dim=0).values
-        neg_aug_sim_gap = neg_aug_sim_max - neg_aug_sim_min  # FIXME: This contains zero.
+            device = anc_embs.device
+            pos_sim = F.pairwise_distance(anc_embs, pos_embs)
+            neg_aug_sims = [F.pairwise_distance(anc_embs_aug, neg_embs_aug) for neg_embs_aug in neg_embs_aug_samples]
 
-        neg_weights = []
-        pass_corr_negw_upd = True
-        for i in range(self.num_neg_samples):
-            neg_weight = (neg_aug_sims[i] - neg_aug_sim_min) / neg_aug_sim_gap
-            if torch.isnan(neg_weight).any():
-                pass_corr_negw_upd = False
-                # FIXME: Every weight contains NaN.
-                neg_weight = torch.nan_to_num(neg_weight, nan=0.0)
-            neg_weights.append(neg_weight)
-        if pass_corr_negw_upd is True:
-            self.cnt_good_weights += 1
+            neg_aug_sims = torch.stack(neg_aug_sims).detach()
+            neg_aug_sim_min = neg_aug_sims.min(dim=0).values
+            neg_aug_sim_max = neg_aug_sims.max(dim=0).values
+            neg_aug_sim_gap = neg_aug_sim_max - neg_aug_sim_min  # FIXME: This contains zero.
 
-        neg_sims = [F.pairwise_distance(anc_embs, neg_embs) for neg_embs in neg_embs_samples]
+            neg_weights = []
+            pass_corr_negw_upd = True
+            for i in range(self.num_neg_samples):
+                neg_weight = (neg_aug_sims[i] - neg_aug_sim_min) / neg_aug_sim_gap
+                if torch.isnan(neg_weight).any():
+                    pass_corr_negw_upd = False
+                    # FIXME: Every weight contains NaN.
+                    neg_weight = torch.nan_to_num(neg_weight, nan=0.0)
+                neg_weights.append(neg_weight)
+            if pass_corr_negw_upd is True:
+                self.cnt_good_weights += 1
 
-        margin_label = torch.full_like(pos_sim, -1)
-        loss1 = torch.tensor(0.0, device=device)
-        loss2 = torch.tensor(0.0, device=device)
-        zero_label = torch.tensor([0.0], device=device)
-        for neg_sim, neg_weight in zip(neg_sims, neg_weights):
-            loss1 += (self.margin_loss(pos_sim, neg_sim, margin_label) * neg_weight).mean()
-            loss2 += torch.max((neg_sim - pos_sim.detach() - self.mask_margin), zero_label).sum()
-        loss2 /= self.num_neg_samples
-        loss = loss1 * self.w_loss1 + loss2 * self.w_loss2
+            neg_sims = [F.pairwise_distance(anc_embs, neg_embs) for neg_embs in neg_embs_samples]
 
-        # NOTE: Only Log GRLC total loss in QCNet
-        # self.log('loss', loss, prog_bar=True, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
-        # self.log('loss1', loss1, prog_bar=True, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
-        # self.log('loss2', loss2, prog_bar=True, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
+            margin_label = torch.full_like(pos_sim, -1)
+            loss1 = torch.tensor(0.0, device=device)
+            loss2 = torch.tensor(0.0, device=device)
+            zero_label = torch.tensor([0.0], device=device)
+            for neg_sim, neg_weight in zip(neg_sims, neg_weights):
+                loss1 += (self.margin_loss(pos_sim, neg_sim, margin_label) * neg_weight).mean()
+                loss2 += torch.max((neg_sim - pos_sim.detach() - self.mask_margin), zero_label).sum()
+            loss2 /= self.num_neg_samples
+            loss = loss1 * self.w_loss1 + loss2 * self.w_loss2
+            losses.append(loss)
 
-        # NOTE: Following code runs under certain condition: args.dataset_name in ['Cora', 'CiteSeer']
-        anc_sim = natsumi_cosine_similarity(anc_embs, anc_embs).detach()
-        neg_sims = [F.pairwise_distance(anc_embs, neg_embs) for neg_embs in neg_embs_samples]
-        new_structure = (torch.stack(neg_sims).mean(dim=0).expand_as(structure) - anc_sim).detach()
-        zeros_struct = torch.zeros_like(structure)
-        ones_struct = torch.ones_like(structure)
-        anc_sim = torch.where(structure > 0, ones_struct, zeros_struct)
-        new_structure = torch.where(new_structure < 0, anc_sim, zeros_struct)
-        new_structure = natsumi_normalize_graph(new_structure)
+            # NOTE: Only Log GRLC total loss in QCNet
+            # self.log('loss', loss, prog_bar=True, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
+            # self.log('loss1', loss1, prog_bar=True, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
+            # self.log('loss2', loss2, prog_bar=True, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
 
+            # NOTE: Following code runs under certain condition: args.dataset_name in ['Cora', 'CiteSeer']
+            anc_sim = natsumi_cosine_similarity(anc_embs, anc_embs).detach()
+            neg_sims = [F.pairwise_distance(anc_embs, neg_embs) for neg_embs in neg_embs_samples]
+            new_structure = (torch.stack(neg_sims).mean(dim=0).expand_as(structure) - anc_sim).detach()
+            zeros_struct = torch.zeros_like(structure)
+            ones_struct = torch.ones_like(structure)
+            anc_sim = torch.where(structure > 0, ones_struct, zeros_struct)
+            new_structure = torch.where(new_structure < 0, anc_sim, zeros_struct)
+            new_structure = natsumi_normalize_graph(new_structure)
+
+            # Update structure
+            structure = new_structure
+
+        if self.save_grlc_structure is True:
+            from predictors import QCNet
+            log_dir = QCNet.instance.trainer.log_dir
+            torch.save(new_structure, f'{log_dir}/structures/{graph.scene_id}.pt')
+
+        # Average the losses over all steps
+        loss = torch.stack(losses).mean()
         # Convert adjacency matrix new_structure to edge index
         edge_index = new_structure.nonzero().t()
         # The graph is undirected, so we only keep one direction of edges.
